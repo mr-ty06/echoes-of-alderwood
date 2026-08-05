@@ -18,24 +18,38 @@ export const QUESTS = {
     id: "breadline",
     chapter: 1,
     title: "Tilda's Breadline",
-    description: "Help the baker gather lost flour sacks so the village can eat tonight.",
-    steps: ["Find the flour sacks around the village.", "Return them to Tilda."],
+    description: "Recover Tilda's flour, learn why she kept the old harvest ledger, and decide who receives the first loaves.",
+    steps: [
+      "Hear why Tilda's breadline matters to Alderwood.",
+      "Recover both flour sacks around the village.",
+      "Return to Tilda and decide how the bread is shared.",
+    ],
     rewards: ["warm shawl", "traveler outfit"],
   },
   smithHammer: {
     id: "smithHammer",
     chapter: 1,
     title: "Brann's Missing Hammer",
-    description: "Track down the blacksmith's hammer in the forest before the forge goes cold.",
-    steps: ["Accept Brann's request.", "Recover the hammer near the corrupted cave.", "Bring it back to the forge."],
+    description: "Recover Brann's heirloom hammer and decide whether it reforges the village wards or becomes a weapon against the corruption.",
+    steps: [
+      "Learn why Brann's hammer bears a Guardian seal.",
+      "Search the corrupted cave path.",
+      "Recover the heirloom hammer.",
+      "Return it and choose what Brann should forge.",
+    ],
     rewards: ["smith bracer", "armour dye"],
   },
   forestFriends: {
     id: "forestFriends",
     chapter: 1,
     title: "Forest Friends",
-    description: "Help the forest spirits heal a spring and calm the deer that guard it.",
-    steps: ["Listen to Sprig Deer.", "Clear the corruption from the spring.", "Return the moon-thread clue to Ember."],
+    description: "Help Sprig Deer heal a wounded spring, then decide whether the last trace of corruption should be destroyed or studied.",
+    steps: [
+      "Listen to Sprig Deer's warning.",
+      "Find the corruption feeding on the spring.",
+      "Defeat the corrupted wisp.",
+      "Return to Sprig Deer and decide the spring's fate.",
+    ],
     rewards: ["fox-tuft hairstyle", "forest charm"],
   },
   puzzleOfRings: {
@@ -114,4 +128,3 @@ export function questStepLabel(quest, state) {
   }
   return quest.steps[0];
 }
-

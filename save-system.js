@@ -59,10 +59,22 @@ export function createSaveState(state) {
       day: state.day,
       minutes: state.minutes,
       weather: state.weather,
+      weatherCycle: state.weatherCycle ?? 0,
     },
     endingProgress: { ...state.endingProgress },
     flags: { ...state.flags },
     worldState: { ...state.worldState },
+    reputation: { ...(state.reputation ?? {}) },
+    memoryFragments: [...(state.memoryFragments ?? [])],
+    memoryFlashbacks: [...(state.memoryFlashbacks ?? [])],
+    discoveredCharacters: [...(state.discoveredCharacters ?? [])],
+    unlockedEndings: [...(state.unlockedEndings ?? [])],
+    journal: {
+      achievements: [...(state.journal?.achievements ?? [])],
+      charactersMet: [...(state.journal?.charactersMet ?? [])],
+      endingsUnlocked: [...(state.journal?.endingsUnlocked ?? [])],
+    },
+    foxState: { ...(state.foxState ?? {}) },
     journalOpen: state.ui.journalOpen,
     mapOpen: state.ui.mapOpen,
     newGamePlusUnlocked: state.flags.newGamePlusUnlocked,
@@ -83,10 +95,32 @@ export function normalizeSave(raw) {
     dialogueChoices: raw.dialogueChoices ?? [],
     unlockedOutfits: raw.unlockedOutfits ?? {},
     discoveredLocations: raw.discoveredLocations ?? [],
-    gameTime: raw.gameTime ?? { day: 1, minutes: 7 * 60, weather: "clear" },
+    gameTime: {
+      day: 1,
+      minutes: 7 * 60,
+      weather: "clear",
+      weatherCycle: 0,
+      ...(raw.gameTime ?? {}),
+    },
     endingProgress: raw.endingProgress ?? {},
     flags: raw.flags ?? {},
-    worldState: raw.worldState ?? {},
+    worldState: {
+      ...(raw.worldState ?? {}),
+      discoveredSecrets: raw.worldState?.discoveredSecrets ?? [],
+      hiddenLocations: raw.worldState?.hiddenLocations ?? [],
+      ambientStory: raw.worldState?.ambientStory ?? [],
+    },
+    reputation: raw.reputation ?? raw.factions ?? {},
+    memoryFragments: raw.memoryFragments ?? [],
+    memoryFlashbacks: raw.memoryFlashbacks ?? [],
+    discoveredCharacters: raw.discoveredCharacters ?? [],
+    unlockedEndings: raw.unlockedEndings ?? [],
+    journal: {
+      achievements: raw.journal?.achievements ?? [],
+      charactersMet: raw.journal?.charactersMet ?? [],
+      endingsUnlocked: raw.journal?.endingsUnlocked ?? [],
+    },
+    foxState: raw.foxState ?? {},
   };
 }
 
@@ -177,4 +211,3 @@ export function clearAutosave() {
   if (!store) return;
   store.removeItem(autosaveKey());
 }
-

@@ -85,6 +85,17 @@ function makeScene(id, name, width, height, ambient, music) {
   };
 }
 
+function routine(places) {
+  return {
+    Dawn: places.Dawn ?? places.Morning ?? places.default,
+    Morning: places.Morning ?? places.default,
+    Afternoon: places.Afternoon ?? places.default,
+    Evening: places.Evening ?? places.default,
+    Night: places.Night ?? places.default,
+    default: places.default,
+  };
+}
+
 function villageScene() {
   const scene = makeScene(
     "village",
@@ -137,13 +148,29 @@ function villageScene() {
   paintRect(scene, 43, 28, 4, 4, "tree");
 
   scene.npcs = [
-    { id: "fox", name: "Ember", kind: "fox", x: 7, y: 18, facing: "left", scene: "village" },
-    { id: "elder", name: "Elder Rowan", kind: "elder", x: 18, y: 14, facing: "down", scene: "village" },
-    { id: "baker", name: "Tilda", kind: "baker", x: 12, y: 27, facing: "right", scene: "village" },
-    { id: "smith", name: "Brann", kind: "smith", x: 44, y: 14, facing: "left", scene: "village" },
-    { id: "herbalist", name: "Nia", kind: "herbalist", x: 31, y: 12, facing: "down", scene: "village" },
-    { id: "merchant", name: "Moss Vale", kind: "merchant", x: 45, y: 7, facing: "down", scene: "village" },
-    { id: "child", name: "Pip", kind: "child", x: 27, y: 27, facing: "up", scene: "village" },
+    {
+      id: "fox",
+      name: "Ember",
+      kind: "fox",
+      x: 7,
+      y: 18,
+      facing: "left",
+      scene: "village",
+      faction: "spirits",
+      schedule: routine({
+        default: { x: 7, y: 18, facing: "left" },
+        Morning: { x: 15, y: 24, facing: "up" },
+        Afternoon: { x: 23, y: 18, facing: "left" },
+        Evening: { x: 24, y: 17, facing: "down" },
+        Night: { x: 13, y: 11, facing: "right" },
+      }),
+    },
+    { id: "elder", name: "Elder Rowan", kind: "elder", x: 18, y: 14, facing: "down", scene: "village", faction: "villagers", schedule: routine({ Dawn: { x: 18, y: 14, facing: "down" }, Morning: { x: 19, y: 11, facing: "right" }, Afternoon: { x: 24, y: 18, facing: "down" }, Evening: { x: 14, y: 23, facing: "left" }, Night: { x: 13, y: 23, facing: "left" } }) },
+    { id: "baker", name: "Tilda", kind: "baker", x: 12, y: 27, facing: "right", scene: "village", faction: "villagers", schedule: routine({ Dawn: { x: 12, y: 27, facing: "right" }, Morning: { x: 13, y: 24, facing: "right" }, Afternoon: { x: 16, y: 22, facing: "down" }, Evening: { x: 11, y: 28, facing: "left" }, Night: { x: 10, y: 28, facing: "left" } }) },
+    { id: "smith", name: "Brann", kind: "smith", x: 44, y: 14, facing: "left", scene: "village", faction: "villagers", schedule: routine({ Dawn: { x: 44, y: 14, facing: "left" }, Morning: { x: 44, y: 14, facing: "left" }, Afternoon: { x: 46, y: 14, facing: "left" }, Evening: { x: 40, y: 15, facing: "down" }, Night: { x: 39, y: 15, facing: "down" } }) },
+    { id: "herbalist", name: "Nia", kind: "herbalist", x: 31, y: 12, facing: "down", scene: "village", faction: "spirits", schedule: routine({ Dawn: { x: 31, y: 12, facing: "down" }, Morning: { x: 29, y: 11, facing: "left" }, Afternoon: { x: 23, y: 18, facing: "down" }, Evening: { x: 31, y: 14, facing: "down" }, Night: { x: 31, y: 14, facing: "down" } }) },
+    { id: "merchant", name: "Moss Vale", kind: "merchant", x: 45, y: 7, facing: "down", scene: "village", faction: "merchants", schedule: routine({ Dawn: { x: 45, y: 7, facing: "down" }, Morning: { x: 45, y: 7, facing: "down" }, Afternoon: { x: 42, y: 22, facing: "left" }, Evening: { x: 48, y: 18, facing: "left" }, Night: { x: 48, y: 18, facing: "left" } }) },
+    { id: "child", name: "Pip", kind: "child", x: 27, y: 27, facing: "up", scene: "village", faction: "villagers", schedule: routine({ Dawn: { x: 27, y: 27, facing: "up" }, Morning: { x: 29, y: 25, facing: "left" }, Afternoon: { x: 26, y: 21, facing: "down" }, Evening: { x: 17, y: 25, facing: "up" }, Night: { x: 16, y: 24, facing: "up" } }) },
   ];
 
   scene.interactables = [
@@ -151,9 +178,11 @@ function villageScene() {
     { id: "forest-gate", type: "door", x: 25, y: 2, w: 2, h: 1, target: "forest", spawn: { x: 23, y: 28 }, label: "the whispering forest" },
     { id: "western-road", type: "locked", x: 49, y: 19, w: 2, h: 2, label: "ruined road", requirement: "chapter2" },
     { id: "lantern", type: "lantern", x: 26, y: 18, w: 1, h: 2, label: "the village lantern" },
+    { id: "lantern-memory", type: "memory", fragment: "square-lantern", x: 25, y: 18, w: 2, h: 2, label: "lantern memory" },
     { id: "wardrobe", type: "wardrobe", x: 15, y: 26, w: 1, h: 1, label: "wardrobe mirror" },
     { id: "well", type: "puzzle", x: 7, y: 27, w: 2, h: 2, label: "old well" },
     { id: "merchant-cart", type: "merchant", x: 46, y: 5, w: 3, h: 3, label: "travelling merchant" },
+    { id: "merchant-memory", type: "memory", fragment: "merchant-road", x: 44, y: 8, w: 1, h: 1, label: "merchant ledger" },
     { id: "flour-sack-a", type: "item", item: "flour sack", x: 10, y: 25, w: 1, h: 1, quest: "breadline" },
     { id: "flour-sack-b", type: "item", item: "flour sack", x: 20, y: 25, w: 1, h: 1, quest: "breadline" },
     { id: "tea-herbs", type: "item", item: "tea herbs", x: 32, y: 13, w: 1, h: 1, quest: "forest-friends" },
@@ -187,13 +216,13 @@ function homeScene() {
   paintRect(scene, 18, 11, 3, 3, "shelf");
 
   scene.npcs = [
-    { id: "fox", name: "Ember", kind: "fox", x: 13, y: 11, facing: "right", scene: "home" },
+    { id: "fox", name: "Ember", kind: "fox", x: 13, y: 11, facing: "right", scene: "home", faction: "spirits", schedule: routine({ default: { x: 13, y: 11, facing: "right" }, Night: { x: 5, y: 14, facing: "left" } }) },
   ];
 
   scene.interactables = [
     { id: "home-door", type: "door", x: 12, y: 16, w: 2, h: 1, target: "village", spawn: { x: 14, y: 27 }, label: "the village" },
     { id: "mirror", type: "wardrobe", x: 14, y: 10, w: 2, h: 3, label: "mirror and wardrobe" },
-    { id: "attic", type: "secret", x: 10, y: 2, w: 2, h: 1, label: "attic hatch" },
+    { id: "attic", type: "memory", fragment: "house-stairs", x: 10, y: 2, w: 2, h: 1, label: "attic hatch" },
     { id: "loose-board", type: "secret-item", x: 9, y: 13, w: 3, h: 1, item: "moon thread", label: "loose floorboard" },
   ];
 
@@ -222,6 +251,7 @@ function forestScene() {
   paintRect(scene, 19, 10, 1, 1, "rune");
   paintRect(scene, 20, 12, 1, 1, "rune");
   paintRect(scene, 31, 17, 4, 4, "cave");
+  paintRect(scene, 27, 21, 1, 1, "fire");
   paintRect(scene, 7, 22, 5, 4, "grove");
   paintRect(scene, 8, 23, 3, 2, "spirit");
   paintRect(scene, 2, 21, 3, 2, "flowers");
@@ -236,8 +266,9 @@ function forestScene() {
   paintRect(scene, 12, 25, 2, 2, "shard");
 
   scene.npcs = [
-    { id: "deer", name: "Sprig Deer", kind: "spirit", x: 10, y: 24, facing: "right", scene: "forest" },
-    { id: "merchant", name: "Moss Vale", kind: "merchant", x: 26, y: 19, facing: "left", scene: "forest" },
+    { id: "fox", name: "Ember", kind: "fox", x: 22, y: 27, facing: "up", scene: "forest", faction: "spirits", schedule: routine({ default: { x: 22, y: 27, facing: "up" }, Night: { x: 27, y: 22, facing: "up" } }) },
+    { id: "deer", name: "Sprig Deer", kind: "spirit", x: 10, y: 24, facing: "right", scene: "forest", faction: "spirits", schedule: routine({ Dawn: { x: 10, y: 24, facing: "right" }, Morning: { x: 8, y: 23, facing: "right" }, Afternoon: { x: 12, y: 22, facing: "left" }, Evening: { x: 14, y: 23, facing: "left" }, Night: { x: 9, y: 24, facing: "right" } }) },
+    { id: "merchant", name: "Moss Vale", kind: "merchant", x: 26, y: 19, facing: "left", scene: "forest", faction: "merchants", schedule: routine({ Dawn: { x: 26, y: 19, facing: "left" }, Morning: { x: 24, y: 18, facing: "left" }, Afternoon: { x: 30, y: 18, facing: "right" }, Evening: { x: 28, y: 20, facing: "left" }, Night: { x: 27, y: 20, facing: "left" } }) },
   ];
 
   scene.interactables = [
@@ -247,6 +278,8 @@ function forestScene() {
     { id: "rune-3", type: "puzzle", x: 20, y: 12, w: 1, h: 1, label: "rune stone 3", puzzle: "forest-runes", index: 2 },
     { id: "cave", type: "combat", x: 31, y: 17, w: 4, h: 4, label: "corrupted cave", enemy: "wisp" },
     { id: "hidden-grove", type: "secret-item", x: 7, y: 22, w: 5, h: 4, item: "forest charm", label: "hidden grove" },
+    { id: "forest-memory", type: "memory", fragment: "forest-spring", x: 7, y: 22, w: 5, h: 4, label: "forest spring" },
+    { id: "guardian-memory", type: "memory", fragment: "guardian-echo", x: 31, y: 17, w: 4, h: 4, label: "guardian echo" },
     { id: "hammer", type: "item", item: "smith hammer", x: 32, y: 24, w: 1, h: 1, quest: "smith-hammer" },
     { id: "lantern-shard", type: "item", item: "lantern shard", x: 12, y: 25, w: 2, h: 2, quest: "broken-lantern" },
   ];
@@ -313,4 +346,3 @@ export function tileAt(scene, x, y) {
 export function sceneMusic(sceneId) {
   return getScene(sceneId).music;
 }
-

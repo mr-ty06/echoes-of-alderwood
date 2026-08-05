@@ -36,13 +36,18 @@ function optionListFor(group, unlocked) {
   return list.filter((option) => option.id === list[0].id || unlocks.includes(option.id));
 }
 
-function selectValue(form, key) {
-  const field = form.elements.namedItem(key);
-  if (!field) return null;
-  if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
-    return field.value;
+function syncCanvasSize(canvas) {
+  const parent = canvas.parentElement;
+  if (!parent) return { width: canvas.width, height: canvas.height, dpr: 1 };
+  const rect = parent.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width * dpr));
+  const height = Math.max(320, Math.floor(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
   }
-  return null;
+  return { width, height, dpr };
 }
 
 export function openAvatarEditor({
@@ -53,51 +58,79 @@ export function openAvatarEditor({
   unlocked = {},
   onSave,
   onCancel,
+  actionLabel = "Apply Changes",
 }) {
-  const root = document.createElement("section");
-  root.className = "panel title-card";
+  const root = document.createElement("div");
+  root.className = "modal-backdrop";
   root.innerHTML = `
-    <div class="title-hero">
-      <div>
-        <h1>${title}</h1>
-        <p>${subtitle}</p>
-      </div>
-      <div class="editor-grid">
-        <div class="editor-preview">
-          <canvas width="256" height="256" data-preview></canvas>
+    <section class="panel modal-window modal-window--editor">
+      <div class="modal-header">
+        <div class="modal-title">
+          <h2>${title}</h2>
+          <p>${subtitle}</p>
         </div>
-        <form class="editor-form" data-form>
-        </form>
+        <button class="btn btn--ghost modal-close" type="button" data-cancel>Close</button>
       </div>
-      <div class="editor-actions">
+      <div class="modal-body">
+        <div class="editor-grid">
+          <div class="editor-preview">
+            <canvas data-preview aria-label="Character preview"></canvas>
+          </div>
+          <div class="editor-scroll">
+            <form class="editor-form" data-form></form>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn--accent" type="button" data-save>${actionLabel}</button>
         <button class="btn btn--ghost" type="button" data-cancel>Cancel</button>
-        <button class="btn btn--accent" type="button" data-randomize>Randomize</button>
-        <button class="btn btn--accent" type="button" data-save>Start the game</button>
+        <button class="btn btn--ghost" type="button" data-randomize>Randomise</button>
       </div>
-    </div>
+    </section>
   `;
 
-  mount.innerHTML = "";
-  mount.appendChild(root);
+  mount.querySelector(".modal-backdrop")?.remove();
+  document.body.appendChild(root);
+  document.body.classList.add("modal-open");
 
   const form = root.querySelector("[data-form]");
   const preview = root.querySelector("[data-preview]");
-  const cancelButton = root.querySelector("[data-cancel]");
+  const modalWindow = root.querySelector(".modal-window--editor");
+  const cancelButtons = root.querySelectorAll("[data-cancel]");
   const randomizeButton = root.querySelector("[data-randomize]");
   const saveButton = root.querySelector("[data-save]");
   const ctx = preview.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-
   const current = mergeAppearance(appearance);
   const controlState = { ...current };
+  let raf = 0;
+
+  function syncEditorLayout() {
+    const bounds = root.getBoundingClientRect();
+    modalWindow.style.width = `${Math.max(320, bounds.width - 16)}px`;
+    modalWindow.style.height = `${Math.max(360, bounds.height - 16)}px`;
+    schedulePreview();
+  }
 
   function renderPreview() {
-    ctx.clearRect(0, 0, preview.width, preview.height);
-    ctx.fillStyle = "rgba(0,0,0,0.14)";
-    ctx.fillRect(0, 0, preview.width, preview.height);
-    drawAvatar(ctx, controlState, preview.width / 2, preview.height / 2 + 18, 4, {
+    const { width, height } = syncCanvasSize(preview);
+    const cssWidth = width / (window.devicePixelRatio || 1);
+    const cssHeight = height / (window.devicePixelRatio || 1);
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "rgba(233,201,115,0.08)";
+    ctx.fillRect(16, 16, width - 32, height - 32);
+    const size = Math.floor(Math.min(cssWidth, cssHeight) * 0.95 * (window.devicePixelRatio || 1));
+    drawAvatar(ctx, controlState, width / 2, height / 2 + Math.floor(height * 0.08), size, {
       view: "portrait",
     });
+  }
+
+  function schedulePreview() {
+    window.cancelAnimationFrame(raf);
+    raf = window.requestAnimationFrame(renderPreview);
   }
 
   function renderForm() {
@@ -117,7 +150,7 @@ export function openAvatarEditor({
         input.placeholder = "Name";
         input.addEventListener("input", () => {
           controlState.name = input.value || "Alder";
-          renderPreview();
+          schedulePreview();
         });
         field.appendChild(input);
       } else {
@@ -132,7 +165,7 @@ export function openAvatarEditor({
         select.value = controlState[key] ?? select.value;
         select.addEventListener("change", () => {
           controlState[key] = select.value;
-          renderPreview();
+          schedulePreview();
         });
         field.appendChild(select);
       }
@@ -159,28 +192,58 @@ export function openAvatarEditor({
     }
     controlState.name = ["Alder", "Mira", "Rowan", "Ember", "Lyra"][Math.floor(Math.random() * 5)];
     renderForm();
-    renderPreview();
+    schedulePreview();
   }
 
-  cancelButton.addEventListener("click", () => onCancel?.());
-  randomizeButton.addEventListener("click", randomize);
-  saveButton.addEventListener("click", () => {
+  function teardown() {
+    document.body.classList.remove("modal-open");
+    window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("resize", handleResize);
+    root.remove();
+  }
+
+  function save() {
+    teardown();
     onSave?.(mergeAppearance(appearance, controlState));
+  }
+
+  function close() {
+    teardown();
+    onCancel?.();
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  }
+
+  function handleResize() {
+    syncEditorLayout();
+  }
+
+  root.addEventListener("click", (event) => {
+    if (event.target === root) {
+      close();
+    }
   });
+  cancelButtons.forEach((button) => button.addEventListener("click", close));
+  randomizeButton.addEventListener("click", randomize);
+  saveButton.addEventListener("click", save);
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("resize", handleResize);
 
   renderForm();
-  renderPreview();
+  syncEditorLayout();
 
   return {
     update(next) {
       Object.assign(controlState, mergeAppearance(controlState, next));
       renderForm();
-      renderPreview();
+      schedulePreview();
     },
-    close() {
-      root.remove();
-    },
+    close,
     element: root,
   };
 }
-

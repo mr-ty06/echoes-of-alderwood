@@ -6,38 +6,40 @@ const DIALOGUES = {
     nodes: [
       {
         id: "start",
-        text: "You're awake. Good. Alderwood has been waiting for you to stop pretending sleep was going to solve anything.",
+        text: "Ember circles your boots, sniffs the air, and tilts his head toward the village square. He is very clearly saying this is not the time to lie down and give up.",
         choices: [
-          { label: "Who are you?", next: "fox-who" },
+          { label: "What are you trying to tell me?", next: "fox-who" },
           { label: "Where am I?", next: "fox-where" },
-          { label: "Did I lose my mind?", next: "fox-mind" },
+          { label: "Am I missing something important?", next: "fox-mind" },
         ],
       },
       {
         id: "fox-who",
-        text: "Ember, if you like names. Fox, if you prefer honesty. I was with you before the silence. I am still annoyed about it.",
+        text: "Ember flicks his ears and paws at the floorboards. He was with you before the silence. The look he gives you suggests he considers that your fault, which is rude but fair.",
         choices: [
           { label: "Help me find my memories.", effect: { type: "flag", key: "foxBond", value: true }, next: "fox-help" },
         ],
       },
       {
         id: "fox-where",
-        text: "Alderwood. Once safe. Now damp, cracked, and haunted by bad decisions with lanterns attached.",
+        text: "Alderwood. Once safe. Now damp, cracked, and haunted by bad decisions with lanterns attached. Ember points toward the village square and then to your own door, because apparently subtlety is for other foxes.",
         choices: [{ label: "Then let's fix it.", effect: { type: "quest", key: "brokenLantern", value: "active" }, next: "fox-fix" }],
       },
       {
         id: "fox-mind",
-        text: "No. If anything, your mind is being extraordinarily quiet. That is different.",
+        text: "Ember noses your sleeve, then gently but firmly shoves you toward the mirror. No barking, no speech, just a deeply judgmental silence.",
         choices: [{ label: "Somehow that helps.", effect: { type: "flag", key: "foxBond", value: true }, next: "fox-help" }],
       },
       {
         id: "fox-help",
-        text: "Good. Walk to the village square, speak with Rowan, and do not let the darkness convince you you are already lost.",
-        choices: [{ label: "I won't.", effect: { type: "quest", key: "brokenLantern", value: "active" }, next: null }],
+        text: "Ember waits at the door, tail low, ready to follow. He looks toward Rowan, then the lantern, then back at you. The instruction is obvious enough without words.",
+        choices: [
+          { label: "I won't.", effect: { type: "quest", key: "brokenLantern", value: "active" }, next: null },
+        ],
       },
       {
         id: "fox-fix",
-        text: "First lesson: when a lantern dies, people start lying. Second lesson: you will need oil, a wick, and a stubborn streak.",
+        text: "Ember circles the broken lantern, then sits with the grim patience of someone who knows you are about to spend an entire chapter solving other people's problems.",
         choices: [{ label: "Teach me the rest later.", next: null }],
       },
     ],
@@ -52,7 +54,7 @@ const DIALOGUES = {
         text: "You were found at dawn near the old homestead. The village lantern failed three nights ago, and the fog has not forgiven us.",
         choices: [
           { label: "I don't remember anything.", effect: { type: "flag", key: "memoryLost", value: true }, next: "rowan-memory" },
-          { label: "Tell me about the lanterns.", next: "rowan-lanterns" },
+          { label: "Tell me about the lanterns.", effect: { type: "reputation", key: "villagers", value: 1 }, next: "rowan-lanterns" },
         ],
       },
       {
@@ -66,7 +68,7 @@ const DIALOGUES = {
         id: "rowan-lanterns",
         text: "Five lanterns guarded Alderwood. Their light kept the corruption asleep. One has broken; the others are beginning to dim.",
         choices: [
-          { label: "I will help restore it.", effect: { type: "quest", key: "brokenLantern", value: "active" }, next: "rowan-quest" },
+          { label: "I will help restore it.", effect: { type: "quest", key: "brokenLantern", value: "active" }, effect2: { type: "reputation", key: "villagers", value: 1 }, next: "rowan-quest" },
         ],
       },
       {
@@ -99,6 +101,45 @@ const DIALOGUES = {
         text: "If you find moon-thread, keep it. Threads like that remember where they came from. So do I, unfortunately.",
         choices: [{ label: "I'll keep an eye out.", next: null }],
       },
+      {
+        id: "baker-return",
+        text: "Both sacks. Good. My mother kept seed flour from Alderwood's last clean harvest in the lining. We can bake it tonight, or save it so the village has something uncorrupted to plant.",
+        choices: [
+          {
+            label: "Bake it. Nobody goes hungry tonight.",
+            hint: "Villagers remember the feast.",
+            effects: [
+              { type: "quest", key: "breadline", value: "completed" },
+              { type: "flag", key: "breadOutcome", value: "shared" },
+              { type: "reputation", key: "villagers", value: 2 },
+            ],
+            reward: "warm shawl",
+            next: "baker-shared",
+          },
+          {
+            label: "Save the seed flour. Alderwood needs a future.",
+            hint: "The village eats less now, but clean grain survives.",
+            effects: [
+              { type: "quest", key: "breadline", value: "completed" },
+              { type: "flag", key: "breadOutcome", value: "saved" },
+              { type: "reputation", key: "villagers", value: 1 },
+              { type: "reputation", key: "spirits", value: 1 },
+            ],
+            reward: "warm shawl",
+            next: "baker-saved",
+          },
+        ],
+      },
+      {
+        id: "baker-shared",
+        text: "Then tonight the ovens stay lit. People will remember the smell long after they forget what frightened them.",
+        choices: [{ label: "Let them have one good night.", next: null }],
+      },
+      {
+        id: "baker-saved",
+        text: "A hard choice, but a living one. I'll stretch the ordinary flour and keep the old grain dry for spring.",
+        choices: [{ label: "Plant it when the light returns.", next: null }],
+      },
     ],
   },
   smith: {
@@ -123,6 +164,47 @@ const DIALOGUES = {
         id: "smith-why",
         text: "Because this village is held together by habit and poor maintenance. Try not to repeat that in front of Rowan.",
         choices: [{ label: "No promises.", next: null }],
+      },
+      {
+        id: "smith-return",
+        text: "You found it. See the seal beneath the soot? My family forged the first Guardian wards with this hammer. I can mend the lantern frame, or make you something sharp enough to survive what comes next.",
+        choices: [
+          {
+            label: "Reforge the village wards.",
+            hint: "Strengthens Alderwood and earns Guardian respect.",
+            effects: [
+              { type: "quest", key: "smithHammer", value: "completed" },
+              { type: "flag", key: "smithOutcome", value: "wards" },
+              { type: "reputation", key: "villagers", value: 1 },
+              { type: "reputation", key: "guardians", value: 1 },
+              { type: "ability", value: "ward-step" },
+            ],
+            reward: "smith bracer",
+            next: "smith-wards",
+          },
+          {
+            label: "Forge a weapon. The corruption is already here.",
+            hint: "Unlocks Heavy Strike but leaves the wards fragile.",
+            effects: [
+              { type: "quest", key: "smithHammer", value: "completed" },
+              { type: "flag", key: "smithOutcome", value: "weapon" },
+              { type: "reputation", key: "villagers", value: 1 },
+              { type: "ability", value: "heavy-strike" },
+            ],
+            reward: "smith bracer",
+            next: "smith-weapon",
+          },
+        ],
+      },
+      {
+        id: "smith-wards",
+        text: "Good. A weapon protects one pair of hands. A ward protects every door behind them.",
+        choices: [{ label: "Make the seal hold.", next: null }],
+      },
+      {
+        id: "smith-weapon",
+        text: "Practical. Grim, but practical. Hold your attack a heartbeat longer and the bracer will carry the hammer's weight.",
+        choices: [{ label: "I'll use it carefully.", next: null }],
       },
     ],
   },
@@ -161,7 +243,7 @@ const DIALOGUES = {
         text: "I've travelled through six provinces and two bad omens to get here. Trust me or don't; either way, I still charge for tea.",
         choices: [
           { label: "I trust you.", effect: { type: "flag", key: "merchantTrusted", value: true }, next: "merchant-trust" },
-          { label: "Not yet.", effect: { type: "flag", key: "merchantTrusted", value: false }, next: "merchant-wary" },
+          { label: "Not yet.", effect: { type: "flag", key: "merchantTrusted", value: false }, effect2: { type: "reputation", key: "merchants", value: -1 }, next: "merchant-wary" },
         ],
       },
       {
@@ -210,7 +292,7 @@ const DIALOGUES = {
         id: "start",
         text: "The spring hurts. The forest does not forget pain. Remove the black threads and the trees will breathe again.",
         choices: [
-          { label: "I'll cleanse it.", effect: { type: "quest", key: "forestFriends", value: "active" }, next: "spirit-help" },
+          { label: "I'll cleanse it.", effect: { type: "quest", key: "forestFriends", value: "active" }, effect2: { type: "reputation", key: "spirits", value: 1 }, next: "spirit-help" },
           { label: "What do you know about the lanterns?", next: "spirit-lanterns" },
         ],
       },
@@ -223,6 +305,47 @@ const DIALOGUES = {
         id: "spirit-lanterns",
         text: "Lantern light once stitched the land together. When the stitch frays, everything below it starts to dream of teeth.",
         choices: [{ label: "That's charming.", next: null }],
+      },
+      {
+        id: "spirit-return",
+        text: "The wisp is gone, but one black root remains beneath the spring. Tear it out and the water heals. Preserve it, and the old Guardians may learn how the corruption thinks.",
+        choices: [
+          {
+            label: "Destroy the root. Let the spring heal.",
+            hint: "The Forest Spirits will remember this mercy.",
+            effects: [
+              { type: "quest", key: "forestFriends", value: "completed" },
+              { type: "flag", key: "forestOutcome", value: "healed" },
+              { type: "reputation", key: "spirits", value: 2 },
+              { type: "memory", value: "forest-spring" },
+            ],
+            reward: "forest charm",
+            next: "spirit-healed",
+          },
+          {
+            label: "Preserve it. Knowledge may save the other lanterns.",
+            hint: "Guardians approve; the forest does not.",
+            effects: [
+              { type: "quest", key: "forestFriends", value: "completed" },
+              { type: "flag", key: "forestOutcome", value: "studied" },
+              { type: "reputation", key: "guardians", value: 2 },
+              { type: "reputation", key: "spirits", value: -1 },
+              { type: "item", value: "corrupted root" },
+            ],
+            reward: "forest charm",
+            next: "spirit-studied",
+          },
+        ],
+      },
+      {
+        id: "spirit-healed",
+        text: "The spring clears. Sprig lowers its antlers, and every leaf around you turns its pale underside toward the light.",
+        choices: [{ label: "Breathe again.", next: null }],
+      },
+      {
+        id: "spirit-studied",
+        text: "Sprig steps back from the sealed root. The forest accepts your reason, but not your choice. Those are not the same thing.",
+        choices: [{ label: "I know.", next: null }],
       },
     ],
   },
@@ -263,25 +386,84 @@ function cloneNodes(nodes) {
   }));
 }
 
+function rewriteNodeText(node, state, speaker) {
+  const phase = state.timeLabel ?? "Dawn";
+  const reputation = state.reputation ?? {};
+  const villagers = reputation.villagers ?? 0;
+  const merchants = reputation.merchants ?? 0;
+  const spirits = reputation.spirits ?? 0;
+  const guardians = reputation.guardians ?? 0;
+
+  const suffixes = [];
+  if (phase === "Morning") suffixes.push("The village is already busy with the day.");
+  else if (phase === "Afternoon") suffixes.push("The square hums with movement and work.");
+  else if (phase === "Evening") suffixes.push("Lantern light softens the edges of every worry.");
+  else if (phase === "Night") suffixes.push("Most of Alderwood is asleep, and the quiet feels watchful.");
+  else suffixes.push("The dawn air still clings to the stones.");
+
+  if (speaker === "Moss Vale") {
+    if (merchants >= 2) suffixes.push("Moss keeps the good goods behind the stall and the bad bargains in front.");
+    else if (merchants <= -2) suffixes.push("Moss watches you like a suspicious ledger entry.");
+  } else if (speaker === "Elder Rowan") {
+    if (villagers >= 2) suffixes.push("Rowan sounds relieved to see the village trust you.");
+    else if (villagers <= -2) suffixes.push("Rowan is careful with every word, which is rarely a good sign.");
+  } else if (speaker === "Sprig Deer") {
+    if (spirits >= 2) suffixes.push("The forest seems to settle around the words, like it recognises them.");
+    else if (spirits <= -2) suffixes.push("The woods do not feel patient with you today.");
+  } else if (speaker === "Alderwood") {
+    if (guardians >= 2) suffixes.push("The old wards stir as if they remember your hands.");
+  } else if (speaker === "Tilda") {
+    if (state.flags?.breadOutcome === "shared") suffixes.push("The square still smells faintly of the feast you chose.");
+    if (state.flags?.breadOutcome === "saved") suffixes.push("A sealed jar of clean seed flour waits above her oven.");
+  } else if (speaker === "Brann") {
+    if (state.flags?.smithOutcome === "wards") suffixes.push("Fresh Guardian seals gleam over the forge door.");
+    if (state.flags?.smithOutcome === "weapon") suffixes.push("He glances at your bracer, listening for the weight inside it.");
+  }
+
+  return `${node.text} ${suffixes.join(" ")}`.trim();
+}
+
 export function getDialogue(npcId, state) {
   const entry = DIALOGUES[npcId] ?? DIALOGUES.foxIntro;
   const nodes = cloneNodes(entry.nodes);
+  for (const node of nodes) {
+    node.text = rewriteNodeText(node, state, entry.speaker);
+  }
   let startNode = nodes[0];
+  const nodeById = (id) => nodes.find((node) => node.id === id) ?? startNode;
 
   if (npcId === "foxIntro" && state.flags?.foxBond) {
-    startNode = nodes[4];
+    startNode = nodeById("fox-help");
   }
   if (npcId === "elderRowan" && state.flags?.lanternRestored) {
-    startNode = nodes[2];
+    startNode = nodeById("rowan-lanterns");
   }
-  if (npcId === "merchant" && state.flags?.merchantTrusted) {
-    startNode = nodes[1];
+  if (npcId === "merchant" && ((state.reputation?.merchants ?? 0) >= 2 || state.flags?.merchantTrusted)) {
+    startNode = nodeById("merchant-trust");
+  }
+  if (npcId === "baker") {
+    if (state.flags?.breadOutcome === "shared") startNode = nodeById("baker-shared");
+    else if (state.flags?.breadOutcome === "saved") startNode = nodeById("baker-saved");
+    else if ((state.quests?.breadline?.progress ?? 0) >= 2) startNode = nodeById("baker-return");
+  }
+  if (npcId === "smith") {
+    if (state.flags?.smithOutcome === "wards") startNode = nodeById("smith-wards");
+    else if (state.flags?.smithOutcome === "weapon") startNode = nodeById("smith-weapon");
+    else if (state.player?.inventory?.includes("smith hammer")) startNode = nodeById("smith-return");
+  }
+  if (npcId === "forestSpirit") {
+    if (state.flags?.forestOutcome === "healed") startNode = nodeById("spirit-healed");
+    else if (state.flags?.forestOutcome === "studied") startNode = nodeById("spirit-studied");
+    else if (state.worldState?.wispDefeated && state.quests?.forestFriends?.status === "active") {
+      startNode = nodeById("spirit-return");
+    }
   }
 
   return {
     speaker: entry.speaker,
     portrait: entry.portrait,
     mood: entry.mood,
+    timeLabel: state.timeLabel ?? "Dawn",
     startNode: startNode.id,
     nodes,
   };
@@ -294,4 +476,3 @@ export function getDialogueNode(dialogue, nodeId) {
 export function listDialogues() {
   return DIALOGUES;
 }
-

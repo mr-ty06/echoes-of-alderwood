@@ -19,7 +19,6 @@ import { CHAPTERS, TILE, createWorld, getScene, isSolidTile, sceneMusic, tileAt 
 import { QUESTS, activateQuest, completeQuest, createQuestState, getJournalEntries, questStepLabel, updateQuestProgress } from "./quests.js";
 import { getDialogue, getDialogueNode, listDialogues } from "./dialogue.js";
 import {
-  clearAutosave,
   createSaveState,
   deleteSlot,
   exportSaveData,
@@ -37,6 +36,122 @@ const VIEW_WIDTH = 960;
 const VIEW_HEIGHT = 640;
 const TILE_SIZE = 16;
 const SAVE_HINT = "Autosaves are stored locally in this browser. Refreshing should not wipe progress.";
+const FACTIONS = {
+  villagers: "Alderwood Villagers",
+  merchants: "Merchants Guild",
+  spirits: "Forest Spirits",
+  guardians: "Ancient Guardians",
+};
+const MEMORY_FRAGMENTS = [
+  {
+    id: "house-stairs",
+    name: "Beneath the Stairs",
+    scene: "home",
+    location: "Foxglove House",
+    summary: "A pulse of lantern light, a child's laugh, and hands painting a ward beneath the floorboards.",
+    flashback: "You remember kneeling beneath the house stairs, helping someone hide a ribbon of moon-thread before the world went cold.",
+    ability: "memory-sense",
+    unlocksLocation: "Hidden Stair Cache",
+  },
+  {
+    id: "square-lantern",
+    name: "Square Lantern",
+    scene: "village",
+    location: "Alderwood Village",
+    summary: "A memory of oil, soot, and five lanterns glowing like a promise over the village square.",
+    flashback: "The square was once bright enough to make every doorstep look safe. You were there when the lanterns were tended, and you knew the oath by heart.",
+    ability: "lantern-sense",
+    unlocksLocation: "Lantern Walk",
+  },
+  {
+    id: "forest-spring",
+    name: "Forest Spring",
+    scene: "forest",
+    location: "Whispering Forest",
+    summary: "Sprig deer, wet moss, and the taste of rain on your tongue as the forest swore itself to the light.",
+    flashback: "You can almost hear the forest answering your name. The spirits remember a hand placed in the spring and a promise to come back.",
+    ability: "sniff",
+    unlocksLocation: "Root Hollow",
+  },
+  {
+    id: "merchant-road",
+    name: "Merchant Road",
+    scene: "village",
+    location: "Travelling Stall",
+    summary: "A bargain that went badly, a map marked in charcoal, and a warning about the kingdoms beyond the hills.",
+    flashback: "A merchant handed you a sealed map and told you the world would not forgive hesitation. That felt like advice and a threat.",
+    ability: "barter",
+    unlocksLocation: "Hidden Trade Route",
+  },
+  {
+    id: "guardian-echo",
+    name: "Guardian Echo",
+    scene: "forest",
+    location: "Corrupted Grove",
+    summary: "Armor under ash. A guardian’s voice asking whether the light is worth the price.",
+    flashback: "You remember standing before a guardian who was already being swallowed by the corruption. Someone made a choice that the village never spoke aloud.",
+    ability: "ward-light",
+    unlocksLocation: "Ashen Gate",
+  },
+];
+const MEMORY_COUNT = MEMORY_FRAGMENTS.length;
+
+function defaultReputation() {
+  return { villagers: 0, merchants: 0, spirits: 0, guardians: 0 };
+}
+
+function defaultJournal() {
+  return { achievements: [], charactersMet: [], endingsUnlocked: [] };
+}
+
+function defaultFoxState() {
+  return {
+    mood: "curious",
+    alert: false,
+    nearSecret: false,
+    sleeping: false,
+    celebrates: 0,
+    hiddenHint: null,
+  };
+}
+
+function knownMemoryById(memoryId) {
+  return MEMORY_FRAGMENTS.find((entry) => entry.id === memoryId) ?? null;
+}
+
+function phaseLabelForMinutes(minutes) {
+  if (minutes < 6 * 60) return "Night";
+  if (minutes < 10 * 60) return "Dawn";
+  if (minutes < 13 * 60) return "Morning";
+  if (minutes < 17 * 60) return "Afternoon";
+  if (minutes < 20 * 60) return "Evening";
+  return "Night";
+}
+
+function weatherForState(state) {
+  const phase = phaseLabelForMinutes(state.minutes);
+  const wintery = state.day % 4 === 0 || state.chapter >= 4;
+  if (state.scene === "home") return phase === "Night" ? "rain" : "clear";
+  if (state.scene === "forest") {
+    if (wintery && phase === "Evening") return "snow";
+    if (state.worldState.wispDefeated) return phase === "Evening" ? "leaves" : "fog";
+    if (phase === "Night") return "thunder";
+    if (phase === "Morning") return "fog";
+    return "rain";
+  }
+  if (wintery && phase === "Night") return "snow";
+  if (phase === "Night") return "fog";
+  if (phase === "Evening") return "leaves";
+  return phase === "Morning" ? "clear" : "rain";
+}
+
+function factionLabel(faction) {
+  return FACTIONS[faction] ?? faction;
+}
+
+function clampReputation(value) {
+  return clamp(value, -4, 4);
+}
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -89,6 +204,7 @@ function createAudioDirector() {
   let timer = 0;
   let step = 0;
   let ambience = null;
+  let transitionTimer = null;
 
   function ensure() {
     if (context) return;
@@ -136,7 +252,7 @@ function createAudioDirector() {
     filter.connect(washGain);
     washGain.connect(gain);
     source.start();
-    ambience = { source, washGain };
+    ambience = { source, washGain, filter };
   }
 
   return {
@@ -149,12 +265,41 @@ function createAudioDirector() {
       noiseWash();
     },
     setScene(sceneId) {
+      if (transitionTimer) window.clearTimeout(transitionTimer);
+      if (context && gain) {
+        const now = context.currentTime;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setTargetAtTime(0.012, now, 0.05);
+        transitionTimer = window.setTimeout(() => {
+          currentScene = sceneId;
+          timer = 0;
+          step = 0;
+          const later = context.currentTime;
+          gain.gain.cancelScheduledValues(later);
+          gain.gain.setTargetAtTime(0.04, later, 0.09);
+        }, 180);
+        return;
+      }
       currentScene = sceneId;
       timer = 0;
       step = 0;
     },
-    tick(dt) {
+    tick(dt, state) {
       if (!context || !gain) return;
+      if (ambience) {
+        const weather = state?.weather ?? "clear";
+        const weatherProfiles = {
+          clear: { volume: currentScene === "village" ? 0.12 : 0.18, frequency: currentScene === "forest" ? 620 : 420 },
+          rain: { volume: 0.48, frequency: 1200 },
+          fog: { volume: 0.2, frequency: 280 },
+          thunder: { volume: 0.58, frequency: 210 },
+          leaves: { volume: 0.32, frequency: 760 },
+          snow: { volume: 0.1, frequency: 170 },
+        };
+        const profile = weatherProfiles[weather] ?? weatherProfiles.clear;
+        ambience.washGain.gain.setTargetAtTime(profile.volume, context.currentTime, 0.25);
+        ambience.filter.frequency.setTargetAtTime(profile.frequency, context.currentTime, 0.3);
+      }
       timer += dt;
       const config = scenes[currentScene] ?? scenes.village;
       const beat = 60 / config.tempo;
@@ -165,6 +310,12 @@ function createAudioDirector() {
         note(tone, beat * 0.9, currentScene === "forest" ? "sine" : "triangle", 0.3);
         if (step % 4 === 0) {
           note(tone / 2, beat * 1.4, "sine", 0.15);
+        }
+        if (currentScene === "village" && state?.weather === "clear" && step % 8 === 3) {
+          note(config.root * 2.5, 0.08, "sine", 0.08);
+        }
+        if (currentScene === "forest" && state?.weather === "thunder" && step % 8 === 0) {
+          note(52, beat * 2.2, "sawtooth", 0.08);
         }
         step += 1;
       }
@@ -187,6 +338,13 @@ function createState() {
     player: createPlayer(appearance),
     world: createWorld(),
     quests: createQuestState(),
+    reputation: defaultReputation(),
+    memoryFragments: [],
+    memoryFlashbacks: [],
+    discoveredCharacters: [],
+    unlockedEndings: [],
+    journal: defaultJournal(),
+    foxState: defaultFoxState(),
     flags: {
       foxBond: false,
       memoryLost: false,
@@ -216,6 +374,8 @@ function createState() {
     timeLabel: "Dawn",
     minutes: 7 * 60,
     day: 1,
+    weatherCycle: 0,
+    screenShake: 0,
     camera: { x: 0, y: 0 },
     transition: null,
     ui: {
@@ -227,6 +387,7 @@ function createState() {
       dialogueOpen: false,
       editorOpen: false,
       pauseOpen: false,
+      modalOpen: false,
     },
     dialogue: null,
     dialogueNode: null,
@@ -244,10 +405,14 @@ function createState() {
     },
     worldState: {
       forestPuzzle: [],
+      forestPuzzleSolved: false,
       hiddenItemFound: false,
       wispDefeated: false,
       lanternRestored: false,
       chapterChoiceMade: false,
+      discoveredSecrets: [],
+      hiddenLocations: [],
+      ambientStory: [],
     },
     saveSlot: null,
     autosaveTimer: 0,
@@ -272,9 +437,17 @@ function hydrateStateFromSave(save) {
   state.dialogueChoices = save.dialogueChoices ?? [];
   state.unlockedOutfits = save.unlockedOutfits ?? state.unlockedOutfits;
   state.discoveredLocations = save.discoveredLocations ?? state.discoveredLocations;
+  state.reputation = { ...defaultReputation(), ...(save.reputation ?? save.factions ?? {}) };
+  state.memoryFragments = [...new Set(save.memoryFragments ?? [])];
+  state.memoryFlashbacks = save.memoryFlashbacks ?? [];
+  state.discoveredCharacters = save.discoveredCharacters ?? [];
+  state.unlockedEndings = save.unlockedEndings ?? [];
+  state.journal = { ...defaultJournal(), ...(save.journal ?? {}) };
+  state.foxState = { ...defaultFoxState(), ...(save.foxState ?? {}) };
   state.minutes = save.gameTime?.minutes ?? state.minutes;
   state.day = save.gameTime?.day ?? state.day;
   state.weather = save.gameTime?.weather ?? state.weather;
+  state.weatherCycle = save.gameTime?.weatherCycle ?? state.weatherCycle;
   state.endingProgress = save.endingProgress ?? state.endingProgress;
   state.flags = { ...state.flags, ...(save.flags ?? {}) };
   state.worldState = { ...state.worldState, ...(save.worldState ?? {}) };
@@ -526,12 +699,43 @@ function drawScene(ctx, scene, camera, t, weather, state) {
       const y = (i * 41 + t * 120) % VIEW_HEIGHT;
       ctx.fillRect(x, y, 3, 2);
     }
+  } else if (weather === "thunder") {
+    ctx.fillStyle = "rgba(195, 220, 255, 0.08)";
+    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.fillStyle = "rgba(244, 247, 255, 0.18)";
+    ctx.fillRect((Math.sin(t * 5) + 1) * VIEW_WIDTH * 0.3, 0, VIEW_WIDTH * 0.4, VIEW_HEIGHT);
+  } else if (weather === "snow") {
+    ctx.fillStyle = "rgba(237, 242, 255, 0.85)";
+    for (let i = 0; i < 36; i += 1) {
+      const x = (i * 91 + t * 32) % VIEW_WIDTH;
+      const y = (i * 43 + t * 60) % VIEW_HEIGHT;
+      ctx.fillRect(x, y, 2, 2);
+    }
   }
 
   // Ambient darkness deepens as the story begins to fray.
   const dusk = state.flags.lanternRestored ? 0.02 : scene.id === "forest" ? 0.18 : 0.1;
   ctx.fillStyle = `rgba(6, 8, 12, ${dusk + Math.max(0, Math.sin(t * 0.05) * 0.02)})`;
   ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+
+  const isNight = state.timeLabel === "Night";
+  if (isNight || weather === "thunder") {
+    const glow = ctx.createRadialGradient(
+      VIEW_WIDTH * 0.52,
+      VIEW_HEIGHT * 0.58,
+      24,
+      VIEW_WIDTH * 0.52,
+      VIEW_HEIGHT * 0.58,
+      240,
+    );
+    glow.addColorStop(0, "rgba(255, 230, 150, 0.18)");
+    glow.addColorStop(0.5, "rgba(255, 230, 150, 0.06)");
+    glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+  }
 }
 
 function drawPropsAndActors(ctx, scene, state, t, blinkOn) {
@@ -542,16 +746,28 @@ function drawPropsAndActors(ctx, scene, state, t, blinkOn) {
     if (sx < -40 || sy < -40 || sx > VIEW_WIDTH + 40 || sy > VIEW_HEIGHT + 40) return;
 
     if (entity.kind === "fox") {
+      const mood = state.foxState?.mood ?? "curious";
       ctx.save();
       ctx.translate(Math.round(sx + TILE_SIZE / 2), Math.round(sy + TILE_SIZE / 2 + 2));
-      ctx.fillStyle = "#d67c43";
+      const base = mood === "nervous" ? "#ba6a35" : mood === "sleepy" ? "#b87343" : "#d67c43";
+      const shadow = mood === "nervous" ? "#7a3f1f" : "#8d4d28";
+      ctx.fillStyle = base;
       ctx.fillRect(-6, -5, 12, 8);
-      ctx.fillStyle = "#8d4d28";
+      ctx.fillStyle = shadow;
       ctx.fillRect(-5, -2, 10, 4);
       ctx.fillStyle = "#fff0c8";
       ctx.fillRect(-2, -1, 1, 1);
       ctx.fillRect(1, -1, 1, 1);
       ctx.fillRect(-1, 2, 2, 1);
+      if (mood === "excited") {
+        ctx.fillStyle = "#f3d48a";
+        ctx.fillRect(5, -7, 2, 5);
+        ctx.fillRect(-7, -7, 2, 5);
+      }
+      if (mood === "sleepy") {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.fillRect(-4, -7, 8, 2);
+      }
       ctx.restore();
       return;
     }
@@ -618,6 +834,7 @@ function drawPropsAndActors(ctx, scene, state, t, blinkOn) {
   };
 
   for (const npc of scene.npcs) {
+    if (npc.hidden) continue;
     drawEntity(npc);
   }
 
@@ -702,6 +919,7 @@ function initDOM(root) {
       <div class="hud-chip">Location <strong data-location>Foxglove House</strong></div>
       <div class="hud-chip">Time <strong data-time>Dawn</strong></div>
       <div class="hud-chip">Music <strong data-music>Memory Room</strong></div>
+      <div class="hud-chip">Standing <strong data-standing>Neutral</strong></div>
     </div>
     <div class="hud-actions">
       <button class="btn btn--ghost" data-journal type="button">Journal</button>
@@ -763,6 +981,7 @@ function initDOM(root) {
     location: header.querySelector("[data-location]"),
     time: header.querySelector("[data-time]"),
     music: header.querySelector("[data-music]"),
+    standing: header.querySelector("[data-standing]"),
     buttons: {
       journal: header.querySelector("[data-journal]"),
       map: header.querySelector("[data-map]"),
@@ -794,6 +1013,11 @@ function updateHUD(refs, state, scene, musicLabel) {
   refs.location.textContent = scene.name;
   refs.time.textContent = state.timeLabel;
   refs.music.textContent = musicLabel;
+  const villagers = state.reputation?.villagers ?? 0;
+  const merchants = state.reputation?.merchants ?? 0;
+  const spirits = state.reputation?.spirits ?? 0;
+  const guardians = state.reputation?.guardians ?? 0;
+  refs.standing.textContent = `${villagers >= 0 ? "+" : ""}${villagers}/${merchants >= 0 ? "+" : ""}${merchants}/${spirits >= 0 ? "+" : ""}${spirits}/${guardians >= 0 ? "+" : ""}${guardians}`;
   refs.hint.textContent = state.mode === "combat"
     ? "Combat: move to dodge, press Space to strike."
     : state.mode === "dialogue"
@@ -812,15 +1036,19 @@ function removePanel(panel) {
   if (panel) panel.remove();
 }
 
-function buildPanelList(title, bodyHTML) {
+function buildPanelList(title, bodyHTML, options = {}) {
   const panel = document.createElement("section");
-  panel.className = "panel panel--floating";
+  panel.className = `panel panel--floating ${options.className ?? ""}`.trim();
   panel.innerHTML = `
-    <div class="panel__header">
-      <h2>${title}</h2>
-      <button type="button" class="btn btn--ghost" data-close>Close</button>
+    <div class="modal-header">
+      <div class="modal-title">
+        <h2>${title}</h2>
+        ${options.subtitle ? `<p>${options.subtitle}</p>` : ""}
+      </div>
+      <button type="button" class="btn btn--ghost modal-close" data-close>Close</button>
     </div>
-    <div class="panel__body">${bodyHTML}</div>
+    <div class="modal-body">${bodyHTML}</div>
+    ${options.footerHTML ? `<div class="modal-footer">${options.footerHTML}</div>` : ""}
   `;
   return panel;
 }
@@ -844,8 +1072,28 @@ function saveSummaryCard(save, slot = null) {
   `;
 }
 
+function trackerCard(label, value, known = true, extra = "") {
+  return `
+    <article class="tracker-card ${known ? "" : "tracker-card--unknown"}">
+      <h4>${known ? label : "???"}</h4>
+      <p>${known ? value : "???".repeat(1)}</p>
+      ${extra ? `<span class="tracker-card__meta">${extra}</span>` : ""}
+    </article>
+  `;
+}
+
 function createJournalHTML(state) {
-  return `<div class="journal-grid">${getJournalEntries(state)
+  const story = CHAPTERS.map((chapter) => {
+    const active = chapter.id <= state.chapter || state.endingProgress.storyComplete;
+    return trackerCard(
+      `Chapter ${chapter.id}`,
+      active ? chapter.title : "???",
+      active,
+      active ? chapter.summary : "Unknown chapter",
+    );
+  }).join("");
+
+  const sideQuests = getJournalEntries(state)
     .map((quest) => {
       const progress = state.quests[quest.id];
       const steps = quest.steps.length;
@@ -856,14 +1104,113 @@ function createJournalHTML(state) {
           <h4>${quest.title}</h4>
           <p>${quest.description}</p>
           <div class="progress-line">
-            <span>${questStepLabel(quest, state)}</span>
+            <span>${progress.status === "completed" ? "Completed" : questStepLabel(quest, state)}</span>
             <span>${progress.status === "completed" ? "Done" : `${current}/${steps}`}</span>
           </div>
           <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
         </article>
       `;
     })
-    .join("")}</div>`;
+    .join("");
+
+  const memoryCards = MEMORY_FRAGMENTS.map((fragment) => {
+    const discovered = state.memoryFragments.includes(fragment.id);
+    return `
+      <article class="tracker-card ${discovered ? "" : "tracker-card--unknown"}">
+        <h4>${discovered ? fragment.name : "???"}</h4>
+        <p>${discovered ? fragment.summary : "A memory fragment has not yet been recovered."}</p>
+        <span class="tracker-card__meta">${discovered ? fragment.location : "Hidden"}</span>
+      </article>
+    `;
+  }).join("");
+
+  const characters = [
+    "Ember",
+    "Elder Rowan",
+    "Tilda",
+    "Brann",
+    "Nia",
+    "Moss Vale",
+    "Sprig Deer",
+    "Pip",
+  ].map((name) => {
+    const known = state.discoveredCharacters.includes(name);
+    return trackerCard(name, known ? "Met" : "???", known, known ? "Remembered" : "Unknown");
+  }).join("");
+
+  const endings = ["restore", "memory", "guardian"].map((ending) => {
+    const known = state.unlockedEndings.includes(ending) || state.endingProgress.lastEnding === ending;
+    const label = ending === "restore" ? "Lanterns Restored" : ending === "memory" ? "Memory Sacrifice" : "New Guardian";
+    return trackerCard(label, known ? "Unlocked" : "???", known, known ? "Ending recorded" : "Locked");
+  }).join("");
+
+  const collectibles = [
+    state.player.inventory.includes("moon thread"),
+    state.player.inventory.includes("lantern shard"),
+    state.player.inventory.includes("memory shard"),
+    state.player.inventory.includes("forest charm"),
+    state.player.inventory.includes("warm shawl"),
+    state.player.inventory.includes("smith bracer"),
+  ]
+    .map((known, index) => {
+      const names = ["Moon Thread", "Lantern Shard", "Memory Shard", "Forest Charm", "Warm Shawl", "Smith Bracer"];
+      return trackerCard(names[index], known ? "Collected" : "???", known, known ? "Added to inventory" : "Hidden");
+    })
+    .join("");
+
+  const outfitEntries = Object.entries(state.unlockedOutfits ?? {}).map(([group, list]) =>
+    trackerCard(group, list?.length ? list.join(", ") : "???", Boolean(list?.length), "Unlocked cosmetics"),
+  ).join("");
+
+  const reputationCards = Object.entries(FACTIONS).map(([key, label]) => {
+    const score = state.reputation?.[key] ?? 0;
+    const known = state.journal?.charactersMet?.length > 0 || score !== 0;
+    return trackerCard(label, known ? `Standing ${score > 0 ? "+" : ""}${score}` : "???", known, score >= 2 ? "Favoured" : score <= -2 ? "Wary" : "Neutral");
+  }).join("");
+
+  return `
+    <div class="journal-sections">
+      <section class="journal-section">
+        <h3>Story Progress</h3>
+        <div class="tracker-grid">${story}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Side Quests</h3>
+        <div class="journal-grid">${sideQuests}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Characters Met</h3>
+        <div class="tracker-grid">${characters}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Locations</h3>
+        <div class="tracker-grid">${[...new Set(state.discoveredLocations)]
+          .map((location) => trackerCard(location, location, true, "Discovered"))
+          .join("") || trackerCard("???", "???", false, "Unknown")}
+        </div>
+      </section>
+      <section class="journal-section">
+        <h3>Memory Fragments</h3>
+        <div class="tracker-grid">${memoryCards}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Collectibles</h3>
+        <div class="tracker-grid">${collectibles}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Outfits</h3>
+        <div class="tracker-grid">${outfitEntries}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Reputation</h3>
+        <div class="tracker-grid">${reputationCards}</div>
+      </section>
+      <section class="journal-section">
+        <h3>Endings</h3>
+        <div class="tracker-grid">${endings}</div>
+      </section>
+    </div>
+  `;
 }
 
 function createInventoryHTML(state) {
@@ -889,19 +1236,165 @@ function createMapHTML(state) {
     const unlocked = chapter.id <= state.chapter || state.endingProgress.storyComplete;
     return `
       <article class="story-card" style="opacity:${unlocked ? 1 : 0.55}">
-        <h3>${chapter.title}</h3>
-        <p>${chapter.summary}</p>
+        <h3>Chapter ${chapter.id}</h3>
+        <p>${chapter.title}</p>
       </article>
     `;
   }).join("");
 
-  const discovered = [...new Set(state.discoveredLocations)].map((location) => `<li>${location}</li>`).join("");
+  const discoveredTags = [...new Set([...(state.discoveredLocations ?? []), ...(state.worldState.hiddenLocations ?? [])])]
+    .map((location) => `<span class="tag">${location}</span>`)
+    .join("");
+
+  const locations = getMapLocations(state)
+    .map(
+      (location) => `
+        <button
+          class="map-marker ${location.current ? "is-current" : ""} ${location.locked ? "is-locked" : ""}"
+          type="button"
+          data-location-id="${location.id}"
+          style="left:${location.x}%; top:${location.y}%"
+          ${location.locked ? "aria-disabled='true'" : ""}
+        >${location.short}</button>
+      `,
+    )
+    .join("");
+
   return `
-    <div class="story-grid">${chapterCards}</div>
-    <div class="story-card" style="margin-top:0.75rem">
-      <h3>Discovered Locations</h3>
-      <p>${discovered || "None yet."}</p>
+    <div class="world-map" data-world-map>
+      <div class="world-map__canvas">
+        <div class="world-map__terrain"></div>
+        ${locations}
+      </div>
+      <aside class="map-detail" data-map-detail>
+        <div class="story-card">
+          <div class="map-detail__name" data-map-name></div>
+          <p data-map-description></p>
+          <div class="map-detail__meta" data-map-meta></div>
+        </div>
+        <div class="story-card">
+          <h3>Discovered Locations</h3>
+          <div class="map-legend" data-map-tags>${discoveredTags || "<span class='tag tag--locked'>None yet</span>"}</div>
+        </div>
+      </aside>
     </div>
+    <div class="story-grid" style="margin-top:0.9rem">${chapterCards}</div>
+  `;
+}
+
+function getMapLocations(state) {
+  const chapter = state.chapter ?? 1;
+  const discoveredSet = new Set(state.discoveredLocations);
+  return [
+    {
+      id: "home",
+      name: "Foxglove House",
+      short: "Home",
+      description: "Your cottage at the edge of Alderwood, where the mirror remembers you before you do.",
+      chapter: 1,
+      x: 20,
+      y: 78,
+      type: "home",
+      quest: "Mirror Wardrobe",
+      discovered: true,
+      current: state.scene === "home",
+      locked: false,
+    },
+    {
+      id: "village",
+      name: "Alderwood Village",
+      short: "Village",
+      description: "The lantern square, bakery, forge, and all the people who will absolutely ask for favors.",
+      chapter: 1,
+      x: 35,
+      y: 60,
+      type: "village",
+      quest: "The Broken Lantern",
+      discovered: true,
+      current: state.scene === "village",
+      locked: false,
+    },
+    {
+      id: "forest",
+      name: "Whispering Forest",
+      short: "Forest",
+      description: "A living wood where the trees remember the old pact, and the moss is not entirely trustworthy.",
+      chapter: 2,
+      x: 52,
+      y: 34,
+      type: "forest",
+      quest: "Forest Friends",
+      discovered: chapter >= 2 || discoveredSet.has("The Whispering Forest"),
+      current: state.scene === "forest",
+      locked: chapter < 2 && !discoveredSet.has("The Whispering Forest"),
+    },
+    {
+      id: "ruins",
+      name: "Sunken Ruins",
+      short: "Ruins",
+      description: "Collapsed chambers below the hills, where the lanterns' history gets much less flattering.",
+      chapter: 3,
+      x: 68,
+      y: 52,
+      type: "ruins",
+      quest: "The Sunken Ruins",
+      discovered: chapter >= 3 || discoveredSet.has("The Sunken Ruins"),
+      current: false,
+      locked: chapter < 3,
+    },
+    {
+      id: "river",
+      name: "River Bend",
+      short: "River",
+      description: "The river that feeds the woods, the wells, and every bad idea involving stepping stones.",
+      chapter: 2,
+      x: 26,
+      y: 40,
+      type: "river",
+      quest: "Forest Friends",
+      discovered: chapter >= 2,
+      current: false,
+      locked: chapter < 2,
+    },
+    {
+      id: "mountains",
+      name: "Ashen Range",
+      short: "Mountains",
+      description: "Jagged peaks that frame the ruined kingdom and keep the storm clouds in place.",
+      chapter: 4,
+      x: 78,
+      y: 18,
+      type: "mountains",
+      quest: "The Ashen Kingdom",
+      discovered: chapter >= 4,
+      current: false,
+      locked: chapter < 4,
+    },
+    {
+      id: "temple",
+      name: "Forgotten Temple",
+      short: "Temple",
+      description: "A sealed sanctum where the final lantern was once tended by hands long gone.",
+      chapter: 5,
+      x: 84,
+      y: 74,
+      type: "temple",
+    quest: "The Final Light",
+      discovered: chapter >= 5,
+      current: false,
+      locked: chapter < 5,
+    },
+  ];
+}
+
+function populateMapDetails(container, location) {
+  container.querySelector("[data-map-name]").textContent = location.name;
+  container.querySelector("[data-map-description]").textContent = location.description;
+  const meta = container.querySelector("[data-map-meta]");
+  meta.innerHTML = `
+    <span class="tag">Chapter ${location.chapter}</span>
+    <span class="tag ${location.discovered ? "" : "tag--locked"}">${location.discovered ? "Discovered" : "Locked"}</span>
+    <span class="tag ${location.current ? "tag--current" : ""}">${location.current ? "Current location" : "Current quest: " + location.quest}</span>
   `;
 }
 
@@ -967,21 +1460,32 @@ function createStartScreenHTML(state) {
 
 function createEndingHTML(state) {
   const ending = state.endingProgress.lastEnding ?? "restore";
+  const memories = new Set(state.memoryFragments ?? []);
+  const villagers = state.reputation?.villagers ?? 0;
+  const merchants = state.reputation?.merchants ?? 0;
+  const spirits = state.reputation?.spirits ?? 0;
+  const guardians = state.reputation?.guardians ?? 0;
   const content = {
     restore: {
       title: "Ending: Lanterns Restored",
       text:
-        "The first lantern burns again. Alderwood breathes easier, and the fox keeps watch while the village begins to remember what hope feels like.",
+        memories.has("square-lantern") && memories.has("forest-spring")
+          ? "The lanterns burn again. Alderwood breathes easier, the fox keeps watch, and the village remembers the light because you remembered it first."
+          : "The first lantern burns again. Alderwood breathes easier, and the fox keeps watch while the village begins to remember what hope feels like.",
     },
     memory: {
       title: "Ending: Memory Sacrifice",
       text:
-        "You give up the memories feeding the corruption. The darkness thins, but your name leaves with it. Alderwood survives because you chose to forget.",
+        memories.has("house-stairs") && spirits > 0
+          ? "You give up the memories feeding the corruption, but enough of your truth remains to leave a scar that Alderwood can heal around. The darkness thins, and the village survives because you chose the harder mercy."
+          : "You give up the memories feeding the corruption. The darkness thins, but your name leaves with it. Alderwood survives because you chose to forget.",
     },
     guardian: {
       title: "Ending: New Guardian",
       text:
-        "You take the corruption into yourself and stand between it and the village. The light bends around your shadow. Someone has to hold the line.",
+        guardians >= 2 || merchants >= 2
+          ? "You take the corruption into yourself and stand between it and the village. The light bends around your shadow, and the old wards accept you because you learned which voices to trust."
+          : "You take the corruption into yourself and stand between it and the village. The light bends around your shadow. Someone has to hold the line.",
     },
   }[ending];
 
@@ -1008,6 +1512,7 @@ function currentHintText(state, scene, nearby) {
   if (nearby?.type === "puzzle") return "Press E to examine the rune stones.";
   if (nearby?.type === "combat") return "Press E to challenge the corrupted wisp.";
   if (nearby?.type === "item") return "Press E to collect the item.";
+  if (nearby?.type === "memory") return "Press E to recover a memory fragment.";
   if (nearby?.type === "secret-item") return "Press E to search the hidden space.";
   if (nearby?.type === "merchant") return "Press E to talk to the merchant.";
   return scene.id === "home" ? "Look around your home. There is more here than dust." : "Explore, talk, and remember to leave the village eventually.";
@@ -1022,12 +1527,31 @@ function pathForQuestItem(state, item) {
 function updateQuestStateForScene(state) {
   if (state.scene === "village") {
     activateQuest(state, "brokenLantern");
-    if (state.worldState.hiddenItemFound) {
+    if (state.worldState.forestPuzzleSolved) {
       updateQuestProgress(state, "puzzleOfRings", 3);
     }
   }
   if (state.worldState.lanternRestored) {
     completeQuest(state, "brokenLantern");
+    registerAchievement(state, "Lantern Restored");
+  }
+  if (state.memoryFragments.length > 0) {
+    registerAchievement(state, "Memory Restored");
+  }
+  if ((state.reputation.villagers ?? 0) >= 2) {
+    registerAchievement(state, "Trusted by Alderwood");
+  }
+  if ((state.reputation.merchants ?? 0) >= 2) {
+    registerAchievement(state, "Trusted by the Merchants Guild");
+  }
+  if ((state.reputation.spirits ?? 0) >= 2) {
+    registerAchievement(state, "Favoured by the Forest Spirits");
+  }
+  if ((state.reputation.guardians ?? 0) >= 2) {
+    registerAchievement(state, "Known to the Guardians");
+  }
+  if (state.foxState.nearSecret) {
+    registerAchievement(state, "Fox Found a Secret");
   }
 }
 
@@ -1039,6 +1563,7 @@ function openDialogue(state, npcId) {
   state.dialogueNode = dialogue.startNode;
   state.dialogueSpeaker = dialogue.speaker;
   state.activeNpc = npcId;
+  registerCharacter(state, dialogue.speaker);
 }
 
 function applyDialogueEffect(state, effect) {
@@ -1054,16 +1579,214 @@ function applyDialogueEffect(state, effect) {
     case "item":
       pathForQuestItem(state, effect.value);
       break;
+    case "reputation": {
+      const amount = typeof effect.value === "number" ? effect.value : 0;
+      state.reputation[effect.key] = clampReputation((state.reputation[effect.key] ?? 0) + amount);
+      break;
+    }
+    case "memory":
+      collectMemoryFragment(state, effect.value, null);
+      break;
+    case "character":
+      registerCharacter(state, effect.value);
+      break;
+    case "achievement":
+      registerAchievement(state, effect.value);
+      break;
+    case "ability":
+      if (effect.value && !state.player.abilities.includes(effect.value)) {
+        state.player.abilities.push(effect.value);
+      }
+      break;
     case "ending":
-      state.mode = "ending";
-      state.ui.dialogueOpen = false;
-      state.endingProgress.lastEnding = effect.value;
-      state.endingProgress.storyComplete = true;
-      state.flags.newGamePlusUnlocked = true;
+      resolveEndingChoice(state, effect.value);
       break;
     default:
       break;
   }
+}
+
+function registerCharacter(state, characterName) {
+  if (!characterName) return;
+  if (!state.discoveredCharacters.includes(characterName)) {
+    state.discoveredCharacters.push(characterName);
+  }
+  if (!state.journal.charactersMet.includes(characterName)) {
+    state.journal.charactersMet.push(characterName);
+  }
+}
+
+function registerAchievement(state, achievement) {
+  if (!achievement) return;
+  if (!state.journal.achievements.includes(achievement)) {
+    state.journal.achievements.push(achievement);
+  }
+}
+
+function adjustReputation(state, faction, amount) {
+  if (!faction) return;
+  state.reputation[faction] = clampReputation((state.reputation[faction] ?? 0) + amount);
+}
+
+function resolveEndingChoice(state, requested) {
+  const keyFragments = new Set(state.memoryFragments);
+  let ending = requested;
+  if (requested === "restore" && (!keyFragments.has("square-lantern") || !keyFragments.has("forest-spring"))) {
+    ending = "memory";
+  }
+  if (requested === "guardian" && (state.reputation.guardians ?? 0) < 1 && !keyFragments.has("guardian-echo")) {
+    ending = "restore";
+  }
+  if (requested === "memory" && !keyFragments.has("house-stairs")) {
+    ending = "guardian";
+  }
+  state.mode = "ending";
+  state.ui.dialogueOpen = false;
+  state.endingProgress.lastEnding = ending;
+  state.endingProgress.storyComplete = true;
+  state.flags.newGamePlusUnlocked = true;
+  state.unlockedEndings = [...new Set([...(state.unlockedEndings ?? []), ending])];
+  if (!state.journal.endingsUnlocked.includes(ending)) {
+    state.journal.endingsUnlocked.push(ending);
+  }
+}
+
+function collectMemoryFragment(state, fragmentId, toast = null) {
+  const fragment = knownMemoryById(fragmentId);
+  if (!fragment || state.memoryFragments.includes(fragment.id)) return false;
+  state.memoryFragments.push(fragment.id);
+  state.memoryFlashbacks.push({
+    id: fragment.id,
+    name: fragment.name,
+    summary: fragment.summary,
+    flashback: fragment.flashback,
+    collectedAt: Date.now(),
+  });
+  registerAchievement(state, `Memory Fragment: ${fragment.name}`);
+  if (fragment.ability && !state.player.abilities.includes(fragment.ability)) {
+    state.player.abilities.push(fragment.ability);
+  }
+  if (fragment.unlocksLocation && !state.worldState.hiddenLocations.includes(fragment.unlocksLocation)) {
+    state.worldState.hiddenLocations.push(fragment.unlocksLocation);
+  }
+  if (toast) {
+    toast.show(`Memory fragment found: ${fragment.name}`);
+  }
+  return true;
+}
+
+function npcScheduleForTime(npc, phase) {
+  const schedule = npc.schedule ?? null;
+  if (!schedule) return null;
+  return schedule[phase] ?? schedule.default ?? null;
+}
+
+function updateNpcSchedules(state, scene) {
+  const phase = state.timeLabel ?? phaseLabelForMinutes(state.minutes);
+  const severeWeather = ["rain", "thunder", "snow"].includes(state.weather);
+  for (const npc of scene.npcs ?? []) {
+    const target = npcScheduleForTime(npc, phase);
+    if (!target) continue;
+    npc.x = target.x;
+    npc.y = target.y;
+    npc.facing = target.facing ?? npc.facing ?? "down";
+    npc.hidden = npc.kind !== "fox" && (
+      (phase === "Night" && ["baker", "herbalist", "child"].includes(npc.kind)) ||
+      (severeWeather && npc.kind === "child")
+    );
+  }
+}
+
+function updateFoxCompanion(state, scene, dt) {
+  const fox = scene.npcs?.find((npc) => npc.kind === "fox");
+  if (!fox) return;
+  const player = state.player;
+  const phase = state.timeLabel ?? phaseLabelForMinutes(state.minutes);
+  const secretNearby = scene.interactables?.some((item) => {
+    if (!["secret", "secret-item", "memory"].includes(item.type)) return false;
+    if (item.type === "memory" && state.memoryFragments.includes(item.fragment)) return false;
+    if (item.type === "secret-item" && state.worldState.discoveredSecrets.includes(item.id)) return false;
+    return Math.abs(item.x - player.x) <= 2 && Math.abs(item.y - player.y) <= 2;
+  });
+  const corruptionNearby = scene.tiles?.some((row, y) =>
+    row?.some?.((tile, x) => tile === "corruption" && Math.abs(x - player.x) <= 3 && Math.abs(y - player.y) <= 3),
+  );
+  let campfire = null;
+  scene.tiles?.some((row, y) => row?.some?.((tile, x) => {
+    if (tile !== "fire") return false;
+    campfire = { x, y };
+    return true;
+  }));
+  state.foxState.nearSecret = Boolean(secretNearby);
+  state.foxState.alert = Boolean(corruptionNearby || state.mode === "combat");
+  state.foxState.sleeping = phase === "Night";
+  state.foxState.mood = state.foxState.sleeping
+    ? "sleepy"
+    : state.foxState.alert
+      ? "nervous"
+      : secretNearby
+        ? "excited"
+        : state.flags.lanternRestored
+          ? "calm"
+          : "curious";
+
+  if (state.foxState.sleeping) {
+    const sleepTarget = campfire ?? { x: player.x - 1, y: player.y + 1 };
+    fox.x = lerp(fox.x, sleepTarget.x, dt * 2);
+    fox.y = lerp(fox.y, sleepTarget.y + 1, dt * 2);
+    fox.facing = "down";
+    return;
+  }
+
+  const offsetX = secretNearby ? 0.35 : state.flags.lanternRestored ? -0.75 : -0.95;
+  const offsetY = secretNearby ? -0.25 : 0.6;
+  fox.x = lerp(fox.x, clamp(player.x + offsetX, 1, scene.width - 2), dt * 2.2);
+  fox.y = lerp(fox.y, clamp(player.y + offsetY, 1, scene.height - 2), dt * 2.2);
+  fox.facing = player.direction === "left" ? "right" : player.direction === "right" ? "left" : "down";
+}
+
+function applyWeatherEffects(state, scene, t) {
+  state.weather = weatherForState(state);
+  state.weatherCycle = (state.weatherCycle + 1) % 9999;
+  if (state.weather === "fog") {
+    scene.ambience = "fog through the pines, quiet footsteps, and a distant owl";
+  } else if (state.weather === "rain") {
+    scene.ambience = "rain on leaves, soft puddles, and shuttered windows";
+  } else if (state.weather === "thunder") {
+    scene.ambience = "thunder over the hills and a restless wind";
+  } else if (state.weather === "snow") {
+    scene.ambience = "snowfall, muffled roads, and a crackling hearth";
+  } else if (state.weather === "leaves") {
+    scene.ambience = "falling leaves, dry paths, and the hush of dusk";
+  }
+  if (state.timeLabel === "Night") {
+    state.foxState.hiddenHint = state.foxState.nearSecret ? "The fox is on to something." : "The fox curls up beside the warm light.";
+  }
+  if (state.mode !== "combat") {
+    state.foxState.celebrates = Math.max(0, state.foxState.celebrates - t * 0.5);
+  }
+}
+
+function createFlashbackPanel(fragment, onClose) {
+  const panel = buildPanelList(fragment.name, `
+    <div class="story-card">
+      <h3>Recovered Memory</h3>
+      <p>${fragment.flashback}</p>
+    </div>
+    <div class="story-card" style="margin-top:0.75rem">
+      <h3>What it unlocks</h3>
+      <p>${fragment.ability ? `Ability: ${fragment.ability}` : "A hidden truth."}</p>
+    </div>
+  `, {
+    className: "modal-window--narrow",
+    subtitle: fragment.summary,
+    footerHTML: `<button class="btn btn--accent" type="button" data-close-flashback>Continue</button>`,
+  });
+  panel.querySelector("[data-close-flashback]")?.addEventListener("click", () => {
+    panel.remove();
+    onClose?.();
+  });
+  return panel;
 }
 
 function openWardrobeEditor(state, refs, onComplete) {
@@ -1091,10 +1814,10 @@ function openWardrobeEditor(state, refs, onComplete) {
       state.scene === "home"
         ? "Adjust your appearance at the mirror. No, the fox will still judge you."
         : "The lantern remembers what the mirror forgets.",
+    actionLabel: state.scene === "home" ? "Apply Changes" : "Start the game",
     onCancel: () => {
       state.mode = "playing";
       state.ui.editorOpen = false;
-      editor.close();
       onComplete?.();
     },
     onSave: (appearance) => {
@@ -1103,7 +1826,6 @@ function openWardrobeEditor(state, refs, onComplete) {
       state.player.appearance.name = state.player.name;
       state.ui.editorOpen = false;
       state.mode = state.endingProgress.storyComplete ? "ending" : "playing";
-      editor.close();
       onComplete?.();
       saveAutosave(state);
     },
@@ -1117,7 +1839,6 @@ function startNewGame(state, refs, toast, audio, afterCreation) {
   audio.setScene(state.scene);
   toast.show("New game created. The village is waiting.");
   openWardrobeEditor(state, refs, () => {
-    state.flags.introSeen = true;
     state.ui.titleOpen = false;
     afterCreation?.();
   });
@@ -1154,7 +1875,7 @@ function completeLantern(state, refs, toast) {
   openDialogue(state, "lanternChoice");
 }
 
-function updateDialoguePanel(refs, state, canvas, callback) {
+function updateDialoguePanel(refs, state, canvas, toast, callback) {
   const dialogue = state.dialogue;
   if (!dialogue) return;
   const node = getDialogueNode(dialogue, state.dialogueNode);
@@ -1222,7 +1943,11 @@ function updateDialoguePanel(refs, state, canvas, callback) {
       button.className = "dialogue-choice";
       button.innerHTML = `${choice.label}${choice.hint ? `<small>${choice.hint}</small>` : ""}`;
       button.addEventListener("click", () => {
-        applyDialogueEffect(state, choice.effect);
+        const effects = choice.effects ?? [choice.effect, choice.effect2].filter(Boolean);
+        effects.forEach((effect) => applyDialogueEffect(state, effect));
+        if (choice.reward) {
+          questReward(state, choice.reward, toast);
+        }
         state.dialogueChoices.push({
           npc: dialogue.speaker,
           node: node.id,
@@ -1230,7 +1955,7 @@ function updateDialoguePanel(refs, state, canvas, callback) {
         });
         if (choice.next) {
           state.dialogueNode = choice.next;
-          updateDialoguePanel(refs, state, canvas, callback);
+          updateDialoguePanel(refs, state, canvas, toast, callback);
         } else {
           state.dialogue = null;
           state.dialogueNode = null;
@@ -1249,18 +1974,22 @@ function updateDialoguePanel(refs, state, canvas, callback) {
 }
 
 function questReward(state, rewardId, toast) {
+  const alreadyOwned = state.player.inventory.includes(rewardId);
   if (rewardId === "warm shawl") {
     state.unlockedOutfits.jacket = [...new Set([...(state.unlockedOutfits.jacket ?? []), "traveler"])];
-    state.player.inventory.push("warm shawl");
+    pathForQuestItem(state, "warm shawl");
+    if (!alreadyOwned) adjustReputation(state, "villagers", 1);
     toast.show("Reward unlocked: Traveler jacket");
   } else if (rewardId === "smith bracer") {
     state.unlockedOutfits.accessories = [...new Set([...(state.unlockedOutfits.accessories ?? []), "lantern"])];
-    state.player.inventory.push("smith bracer");
+    pathForQuestItem(state, "smith bracer");
+    if (!alreadyOwned) adjustReputation(state, "villagers", 1);
     toast.show("Reward unlocked: Lantern charm");
   } else if (rewardId === "forest charm") {
     state.unlockedOutfits.hairstyles = [...new Set([...(state.unlockedOutfits.hairstyles ?? []), "fox-tuft"])];
     state.unlockedOutfits.accessories = [...new Set([...(state.unlockedOutfits.accessories ?? []), "moonpin"])];
-    state.player.inventory.push("forest charm");
+    pathForQuestItem(state, "forest charm");
+    if (!alreadyOwned) adjustReputation(state, "spirits", 1);
     toast.show("Reward unlocked: Fox tuft hairstyle");
   }
 }
@@ -1276,16 +2005,14 @@ function handleItemPickup(state, item, questId, toast) {
   }
   if (questId === "breadline") {
     updateQuestProgress(state, "breadline", Math.min(QUESTS.breadline.steps.length, (state.quests.breadline.progress ?? 0) + 1));
-    if (state.quests.breadline.progress >= QUESTS.breadline.steps.length - 1) {
-      completeQuest(state, "breadline");
-      questReward(state, "warm shawl", toast);
+    if (state.quests.breadline.progress >= 2) {
+      toast.show("Both sacks recovered. Tilda is waiting at the bakery.");
     }
   }
   if (questId === "smith-hammer") {
     activateQuest(state, "smithHammer");
     updateQuestProgress(state, "smithHammer", 2);
-    completeQuest(state, "smithHammer");
-    questReward(state, "smith bracer", toast);
+    toast.show("Brann's hammer is intact. Return it to the forge.");
   }
   if (questId === "forest-friends") {
     activateQuest(state, "forestFriends");
@@ -1309,8 +2036,8 @@ function setScene(state, sceneId, spawn = null, reason = "") {
   state.camera.x = state.player.x * TILE_SIZE - VIEW_WIDTH / 2;
   state.camera.y = state.player.y * TILE_SIZE - VIEW_HEIGHT / 2;
   state.transition = { alpha: 1, reason };
-  state.weather = scene.id === "forest" ? "fog" : scene.id === "home" ? "clear" : "leaves";
-  state.timeLabel = state.weather === "fog" ? "Evening" : state.scene === "home" ? "Dawn" : "Afternoon";
+  state.timeLabel = phaseLabelForMinutes(state.minutes);
+  state.weather = weatherForState(state);
   saveAutosave(state);
 }
 
@@ -1321,13 +2048,17 @@ function sceneInteractables(scene) {
 function activeNearbyInteractable(state, scene) {
   const px = state.player.x;
   const py = state.player.y;
-  const playerBox = { x: px - 0.4, y: py - 0.4, w: 0.8, h: 0.8 };
-  return sceneInteractables(scene).find((item) =>
-    intersects(playerBox.x, playerBox.y, playerBox.w, playerBox.h, item.x, item.y, item.w, item.h),
-  );
+  const playerBox = { x: px - 0.7, y: py - 0.7, w: 1.4, h: 1.4 };
+  return sceneInteractables(scene).find((item) => {
+    if (item.type === "memory" && state.memoryFragments.includes(item.fragment)) return false;
+    if (item.type === "item" && state.player.inventory.includes(item.item)) return false;
+    if (item.type === "secret-item" && state.worldState.discoveredSecrets.includes(item.id)) return false;
+    if (item.type === "combat" && state.worldState.wispDefeated) return false;
+    return intersects(playerBox.x, playerBox.y, playerBox.w, playerBox.h, item.x, item.y, item.w, item.h);
+  });
 }
 
-function useCurrentInteraction(state, refs, toast, audio) {
+function useCurrentInteraction(state, refs, toast, audio, setModalState) {
   const scene = getScene(state.scene);
   const nearby = activeNearbyInteractable(state, scene);
   if (state.mode === "dialogue" || state.mode === "editor" || state.mode === "ending") return;
@@ -1344,6 +2075,43 @@ function useCurrentInteraction(state, refs, toast, audio) {
 
   if (nearby?.type === "wardrobe") {
     openWardrobeEditor(state, refs, () => {});
+    return;
+  }
+
+  if (nearby?.type === "memory") {
+    if (nearby.fragment === "merchant-road" && (state.reputation.merchants ?? 0) < 1 && !state.flags.merchantTrusted) {
+      toast.show("Moss has locked the old ledger until you earn a little trust.");
+      adjustReputation(state, "merchants", -1);
+      return;
+    }
+    if (collectMemoryFragment(state, nearby.fragment, toast)) {
+      const fragment = knownMemoryById(nearby.fragment);
+      if (fragment) {
+        let flashback = null;
+        const closeFlashback = () => {
+          flashback?.remove();
+          state.mode = state.endingProgress.storyComplete ? "ending" : "playing";
+          setModalState(false);
+          saveAutosave(state);
+        };
+        flashback = createFlashbackPanel(fragment, closeFlashback);
+        refs.overlayLayer.appendChild(flashback);
+        setModalState(true, closeFlashback);
+      }
+      if (nearby.fragment === "forest-spring") {
+        adjustReputation(state, "spirits", 1);
+      }
+      if (nearby.fragment === "square-lantern") {
+        adjustReputation(state, "villagers", 1);
+      }
+      if (nearby.fragment === "merchant-road") {
+        adjustReputation(state, "merchants", 1);
+      }
+      if (nearby.fragment === "guardian-echo") {
+        adjustReputation(state, "guardians", 1);
+      }
+      saveAutosave(state);
+    }
     return;
   }
 
@@ -1369,7 +2137,7 @@ function useCurrentInteraction(state, refs, toast, audio) {
     if (sequence.length === 2 && puzzleKey === 1) toast.show("Lantern. Warmer.");
     if (sequence.length >= 3) {
       if (sequence.join(",") === expected.join(",")) {
-        state.worldState.hiddenItemFound = true;
+        state.worldState.forestPuzzleSolved = true;
         completeQuest(state, "puzzleOfRings");
         questReward(state, "forest charm", toast);
         state.player.inventory.push("oil");
@@ -1403,10 +2171,12 @@ function useCurrentInteraction(state, refs, toast, audio) {
   }
 
   if (nearby?.type === "secret-item") {
-    if (!state.worldState.hiddenItemFound) {
+    if (!state.worldState.discoveredSecrets.includes(nearby.id)) {
+      state.worldState.discoveredSecrets.push(nearby.id);
       state.worldState.hiddenItemFound = true;
-      state.player.inventory.push("moon thread");
-      toast.show("Hidden item found: moon thread.");
+      pathForQuestItem(state, nearby.item);
+      toast.show(`Hidden item found: ${nearby.item}.`);
+      state.foxState.celebrates = 1;
       questReward(state, "forest charm", toast);
       saveAutosave(state);
     }
@@ -1415,31 +2185,33 @@ function useCurrentInteraction(state, refs, toast, audio) {
 
   if (nearby?.type === "item") {
     handleItemPickup(state, nearby.item, nearby.quest, toast);
-    if (nearby.item === "smith hammer") {
-      completeQuest(state, "smithHammer");
-      questReward(state, "smith bracer", toast);
-    }
     if (nearby.item === "lantern shard") {
       updateQuestProgress(state, "brokenLantern", 4);
-      state.player.inventory.push("lantern shard");
       toast.show("Collected the lantern shard.");
     }
     return;
   }
 
   if (nearby?.type === "merchant") {
+    adjustReputation(state, "merchants", 1);
     openDialogue(state, "merchant");
     return;
   }
 
   const npc = scene.npcs.find((actor) => {
+    if (actor.hidden) return false;
     const dx = Math.abs(actor.x - state.player.x);
     const dy = Math.abs(actor.y - state.player.y);
     return dx <= 1.25 && dy <= 1.25;
   });
   if (npc) {
-    if (npc.id === "fox") openDialogue(state, "foxIntro");
-    else openDialogue(state, npc.id);
+    registerCharacter(state, npc.name);
+    if (npc.id === "fox") {
+      openDialogue(state, "foxIntro");
+    } else {
+      const dialogueId = npc.id === "elder" ? "elderRowan" : npc.id === "deer" ? "forestSpirit" : npc.id;
+      openDialogue(state, dialogueId);
+    }
     return;
   }
 
@@ -1460,7 +2232,9 @@ function updateCombat(state, dt, toast) {
   enemy.x += enemy.vx * dt * 2;
   enemy.y += enemy.vy * dt * 2;
   if (distance < 1.2) {
-    state.player.health = Math.max(0, state.player.health - 18 * dt);
+    const wardReduction = state.player.abilities.includes("ward-step") ? 0.65 : 1;
+    state.player.health = Math.max(0, state.player.health - 18 * wardReduction * dt);
+    state.screenShake = Math.max(state.screenShake, 0.35);
     if (state.player.health <= 0) {
       state.player.health = state.player.maxHealth;
       state.player.energy = state.player.maxEnergy;
@@ -1524,17 +2298,7 @@ function maybeAdvanceTime(state, dt) {
     state.minutes -= 24 * 60;
     state.day += 1;
   }
-  if (state.minutes < 6 * 60) state.timeLabel = "Night";
-  else if (state.minutes < 10 * 60) state.timeLabel = "Dawn";
-  else if (state.minutes < 15 * 60) state.timeLabel = "Afternoon";
-  else if (state.minutes < 19 * 60) state.timeLabel = "Evening";
-  else state.timeLabel = "Night";
-}
-
-function updateWeather(state) {
-  if (state.scene === "forest") state.weather = state.worldState.wispDefeated ? "leaves" : "fog";
-  else if (state.scene === "village" && !state.flags.lanternRestored) state.weather = state.timeLabel === "Evening" ? "fog" : "clear";
-  else if (state.scene === "home") state.weather = "clear";
+  state.timeLabel = phaseLabelForMinutes(state.minutes);
 }
 
 function renderUIOverlays(refs, state) {
@@ -1560,7 +2324,6 @@ function startGame(root) {
   let running = true;
   let last = performance.now();
   let blinkClock = 0;
-  let introShown = false;
   let savePromptShown = false;
   let titlePanel = null;
   let savePanel = null;
@@ -1575,14 +2338,44 @@ function startGame(root) {
 
   const save = loadLatestSave();
   const state = hydrateStateFromSave(save);
-  audio.start();
   audio.setScene(state.scene);
+  let activeModalCloser = null;
+
+  function setModalState(isOpen, closer = null) {
+    state.ui.modalOpen = isOpen;
+    if (!isOpen) {
+      state.ui.journalOpen = false;
+      state.ui.mapOpen = false;
+      state.ui.inventoryOpen = false;
+      state.ui.saveOpen = false;
+      state.ui.titleOpen = false;
+      state.ui.dialogueOpen = false;
+      state.ui.editorOpen = false;
+      state.ui.pauseOpen = false;
+    }
+    refs.overlayLayer.classList.toggle("is-modal-open", isOpen);
+    refs.shell.classList.toggle("is-modal-open", isOpen);
+    document.body.classList.toggle("modal-open", isOpen);
+    activeModalCloser = isOpen ? closer : null;
+    if (isOpen) {
+      input.up = input.down = input.left = input.right = false;
+      input.run = input.action = input.attack = input.interact = false;
+      input.confirm = input.cancel = false;
+    }
+  }
+
+  refs.overlayLayer.addEventListener("click", (event) => {
+    if (event.target === refs.overlayLayer && activeModalCloser) {
+      activeModalCloser();
+    }
+  });
 
   function clearModalPanels() {
     for (const panel of [titlePanel, savePanel, pausePanel, endingPanel, journalPanel, mapPanel, inventoryPanel]) {
       panel?.remove();
     }
     titlePanel = savePanel = pausePanel = endingPanel = journalPanel = mapPanel = inventoryPanel = null;
+    setModalState(false);
   }
 
   function openTitleScreen() {
@@ -1590,8 +2383,14 @@ function startGame(root) {
     state.mode = "title";
     refs.fade.classList.remove("is-visible");
     titlePanel = buildPanelList("Alderwood", createStartScreenHTML(state));
+    setModalState(true, () => {
+      titlePanel?.remove();
+      titlePanel = null;
+      setModalState(false);
+    });
     titlePanel.querySelector("[data-close]")?.addEventListener("click", () => {
       titlePanel?.remove();
+      setModalState(false);
       state.mode = "playing";
     });
     const newGame = () => {
@@ -1603,9 +2402,14 @@ function startGame(root) {
     };
     titlePanel.querySelector("[data-new-game]")?.addEventListener("click", newGame);
     titlePanel.querySelector("[data-continue]")?.addEventListener("click", () => {
-      if (save) {
+      const latest = loadLatestSave();
+      if (latest) {
+        Object.assign(state, hydrateStateFromSave(latest));
         state.mode = "playing";
-        state.player.name = save.name ?? state.player.name;
+        titlePanel?.remove();
+        titlePanel = null;
+        setModalState(false);
+        audio.setScene(state.scene);
         toast.show("Continuing from autosave.");
         refs.fade.classList.remove("is-visible");
       }
@@ -1618,9 +2422,15 @@ function startGame(root) {
   function openSavePanel() {
     savePanel?.remove();
     savePanel = buildPanelList("Save System", createSavePanelHTML(state));
+    setModalState(true, () => {
+      savePanel?.remove();
+      savePanel = null;
+      setModalState(false);
+    });
     savePanel.querySelector("[data-close]").addEventListener("click", () => {
       savePanel?.remove();
       savePanel = null;
+      setModalState(false);
     });
     savePanel.querySelectorAll("[data-save-slot]").forEach((button) =>
       button.addEventListener("click", () => {
@@ -1637,6 +2447,7 @@ function startGame(root) {
           Object.assign(state, hydrateStateFromSave(loaded));
           state.mode = "playing";
           savePanel?.remove();
+          setModalState(false);
           toast.show(`Loaded slot ${slot}.`);
         } else {
           toast.show("That slot is empty.");
@@ -1650,6 +2461,7 @@ function startGame(root) {
           deleteSlot(slot);
           toast.show(`Slot ${slot} deleted.`);
           savePanel?.remove();
+          setModalState(false);
           openSavePanel();
         }
       }),
@@ -1671,6 +2483,7 @@ function startGame(root) {
         state.mode = "playing";
         toast.show("Save data imported.");
         savePanel?.remove();
+        setModalState(false);
       } catch (error) {
         toast.show(error.message);
       }
@@ -1695,30 +2508,49 @@ function startGame(root) {
         <button class="btn btn--ghost" type="button" data-return-title>Return to title</button>
       </div>
     `);
+    setModalState(true, () => {
+      pausePanel?.remove();
+      pausePanel = null;
+      setModalState(false);
+    });
     pausePanel.querySelector("[data-close]").addEventListener("click", () => {
       pausePanel?.remove();
       pausePanel = null;
+      setModalState(false);
       state.mode = "playing";
     });
     pausePanel.querySelector("[data-resume]").addEventListener("click", () => {
       pausePanel?.remove();
       pausePanel = null;
+      setModalState(false);
       state.mode = "playing";
     });
     pausePanel.querySelector("[data-open-journal]").addEventListener("click", () => {
+      pausePanel?.remove();
+      pausePanel = null;
+      setModalState(false);
       openJournal();
     });
     pausePanel.querySelector("[data-open-map]").addEventListener("click", () => {
+      pausePanel?.remove();
+      pausePanel = null;
+      setModalState(false);
       openMap();
     });
     pausePanel.querySelector("[data-open-inventory]").addEventListener("click", () => {
+      pausePanel?.remove();
+      pausePanel = null;
+      setModalState(false);
       openInventory();
     });
     pausePanel.querySelector("[data-open-save]").addEventListener("click", () => {
+      pausePanel?.remove();
+      pausePanel = null;
+      setModalState(false);
       openSavePanel();
     });
     pausePanel.querySelector("[data-return-title]").addEventListener("click", () => {
-      clearAutosave();
+      saveAutosave(state);
       openTitleScreen();
     });
     refs.overlayLayer.appendChild(pausePanel);
@@ -1728,15 +2560,48 @@ function startGame(root) {
     journalPanel?.remove();
     journalPanel = buildPanelList("Quest Journal", createJournalHTML(state));
     journalPanel.setAttribute("data-journal-panel", "true");
-    journalPanel.querySelector("[data-close]").addEventListener("click", () => journalPanel?.remove());
+    setModalState(true, () => {
+      journalPanel?.remove();
+      journalPanel = null;
+      setModalState(false);
+    });
+    journalPanel.querySelector("[data-close]").addEventListener("click", () => {
+      journalPanel?.remove();
+      journalPanel = null;
+      setModalState(false);
+    });
     refs.overlayLayer.appendChild(journalPanel);
   }
 
   function openMap() {
     mapPanel?.remove();
-    mapPanel = buildPanelList("World Map", createMapHTML(state));
+    mapPanel = buildPanelList("World Map", createMapHTML(state), {
+      className: "modal-window--wide",
+      subtitle: "A living map of Alderwood and the lands that still remember it.",
+    });
     mapPanel.setAttribute("data-map-panel", "true");
-    mapPanel.querySelector("[data-close]").addEventListener("click", () => mapPanel?.remove());
+    setModalState(true, () => {
+      mapPanel?.remove();
+      mapPanel = null;
+      setModalState(false);
+    });
+    mapPanel.querySelector("[data-close]").addEventListener("click", () => {
+      mapPanel?.remove();
+      mapPanel = null;
+      setModalState(false);
+    });
+    const locations = getMapLocations(state);
+    const selected = locations.find((location) => location.current || location.discovered) ?? locations[0];
+    if (selected) {
+      populateMapDetails(mapPanel, selected);
+    }
+    mapPanel.querySelectorAll("[data-location-id]").forEach((button) => {
+      const location = locations.find((entry) => entry.id === button.getAttribute("data-location-id"));
+      if (!location) return;
+      button.addEventListener("click", () => {
+        populateMapDetails(mapPanel, location);
+      });
+    });
     refs.overlayLayer.appendChild(mapPanel);
   }
 
@@ -1744,7 +2609,16 @@ function startGame(root) {
     inventoryPanel?.remove();
     inventoryPanel = buildPanelList("Inventory", createInventoryHTML(state));
     inventoryPanel.setAttribute("data-inventory-panel", "true");
-    inventoryPanel.querySelector("[data-close]").addEventListener("click", () => inventoryPanel?.remove());
+    setModalState(true, () => {
+      inventoryPanel?.remove();
+      inventoryPanel = null;
+      setModalState(false);
+    });
+    inventoryPanel.querySelector("[data-close]").addEventListener("click", () => {
+      inventoryPanel?.remove();
+      inventoryPanel = null;
+      setModalState(false);
+    });
     refs.overlayLayer.appendChild(inventoryPanel);
   }
 
@@ -1754,6 +2628,11 @@ function startGame(root) {
     endingPanel.setAttribute("data-ending-panel", "true");
     endingPanel.innerHTML = createEndingHTML(state);
     endingPanel.className = "panel title-card";
+    setModalState(true, () => {
+      endingPanel?.remove();
+      endingPanel = null;
+      setModalState(false);
+    });
     endingPanel.querySelector("[data-new-game-plus]").addEventListener("click", () => {
       const reset = createState();
       reset.flags.newGamePlusUnlocked = true;
@@ -1777,8 +2656,7 @@ function startGame(root) {
   }
 
   function openIntroCutscene() {
-    if (introShown) return;
-    introShown = true;
+    if (state.flags.introSeen) return;
     state.mode = "cutscene";
     triggerCutscene(
       state,
@@ -1793,29 +2671,36 @@ function startGame(root) {
         state.player.y = 8;
         state.player.health = 100;
         state.player.energy = 100;
+        state.flags.introSeen = true;
         audio.setScene("home");
         saveAutosave(state);
       },
     );
   }
 
-  function handleCombatAction() {
+function handleCombatAction() {
     if (state.mode !== "combat" || !state.combat?.enemy) return;
     if (state.player.attackCooldown > 0) return;
     const enemy = state.combat.enemy;
     const dist = Math.hypot(state.player.x - enemy.x, state.player.y - enemy.y);
     if (dist < 2) {
-      enemy.health -= 8;
+      enemy.health -= state.player.abilities.includes("heavy-strike") ? 12 : 8;
       state.player.attackCooldown = 0.3;
+      state.screenShake = Math.max(state.screenShake, 0.25);
+      state.foxState.alert = true;
       spawnSparkles(state, enemy.x * TILE_SIZE, enemy.y * TILE_SIZE, "#ffc6ed", 6);
       if (enemy.health <= 0) {
         state.combat = null;
         state.mode = "playing";
         state.worldState.wispDefeated = true;
-        state.player.inventory.push("lantern shard");
+        pathForQuestItem(state, "lantern shard");
         updateQuestProgress(state, "brokenLantern", 3);
+        if (state.quests.forestFriends.status === "active") {
+          updateQuestProgress(state, "forestFriends", 3);
+        }
+        adjustReputation(state, "spirits", 1);
+        state.foxState.celebrates = 1;
         toast.show("The wisp dissolves, leaving a lantern shard behind.");
-        completeQuest(state, "smithHammer");
         audio.setScene(state.scene);
         saveAutosave(state);
       }
@@ -1836,21 +2721,41 @@ function startGame(root) {
     const dt = Math.min(0.032, (now - last) / 1000);
     last = now;
     blinkClock += dt;
+    state.screenShake = Math.max(0, state.screenShake - dt * 1.8);
+    audio.tick(dt, state);
 
     if (state.mode === "playing" || state.mode === "combat") {
+      if (state.ui.modalOpen) {
+        updateHUD(refs, state, getScene(state.scene), sceneMusic(state.scene));
+        ctx.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+        drawScene(ctx, getScene(state.scene), state.camera, now / 1000, state.weather, state);
+        drawPropsAndActors(ctx, getScene(state.scene), state, now / 1000, Math.floor(blinkClock * 4) % 2 === 0);
+        drawAvatar(
+          ctx,
+          state.player.appearance,
+          state.player.x * TILE_SIZE - state.camera.x + TILE_SIZE / 2,
+          state.player.y * TILE_SIZE - state.camera.y + TILE_SIZE / 2 + 2,
+          18,
+          { view: "topdown", blink: Math.floor(blinkClock * 5) % 2 === 0, facing: state.player.direction },
+        );
+        requestAnimationFrame(updateLoop);
+        return;
+      }
       const scene = getScene(state.scene);
       if (state.mode === "playing") {
         playerMove(state, scene, input, dt);
       }
       updateCamera(state, dt);
       maybeAdvanceTime(state, dt);
-      updateWeather(state);
+      updateNpcSchedules(state, scene);
+      updateFoxCompanion(state, scene, dt);
+      applyWeatherEffects(state, scene, dt);
       updateParticles(state, dt);
       if (state.player.attackCooldown > 0) state.player.attackCooldown = Math.max(0, state.player.attackCooldown - dt);
       if (state.mode === "combat") updateCombat(state, dt, toast);
       if (input.interact || input.action) {
         input.interact = input.action = false;
-        useCurrentInteraction(state, refs, toast, audio);
+        useCurrentInteraction(state, refs, toast, audio, setModalState);
       }
       if (input.attack) {
         input.attack = false;
@@ -1862,7 +2767,7 @@ function startGame(root) {
     }
 
     if (state.mode === "dialogue") {
-      updateDialoguePanel(refs, state, canvas, () => {});
+      updateDialoguePanel(refs, state, canvas, toast, () => {});
       updateHUD(refs, state, getScene(state.scene), sceneMusic(state.scene));
     } else {
       const panel = refs.overlayLayer.querySelector(".dialogue-panel");
@@ -1887,16 +2792,18 @@ function startGame(root) {
     }
 
     const scene = getScene(state.scene);
+    const shakeX = state.screenShake ? Math.round((Math.random() - 0.5) * state.screenShake * 10) : 0;
+    const shakeY = state.screenShake ? Math.round((Math.random() - 0.5) * state.screenShake * 8) : 0;
     ctx.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-    drawScene(ctx, scene, state.camera, now / 1000, state.weather, state);
-    drawPropsAndActors(ctx, scene, state, now / 1000, Math.floor(blinkClock * 4) % 2 === 0);
+    drawScene(ctx, scene, { x: state.camera.x + shakeX, y: state.camera.y + shakeY }, now / 1000, state.weather, state);
+    drawPropsAndActors(ctx, scene, { ...state, camera: { x: state.camera.x + shakeX, y: state.camera.y + shakeY } }, now / 1000, Math.floor(blinkClock * 4) % 2 === 0);
 
     // Player sprite.
     drawAvatar(
       ctx,
       state.player.appearance,
-      state.player.x * TILE_SIZE - state.camera.x + TILE_SIZE / 2,
-      state.player.y * TILE_SIZE - state.camera.y + TILE_SIZE / 2 + 2,
+      state.player.x * TILE_SIZE - state.camera.x + shakeX + TILE_SIZE / 2,
+      state.player.y * TILE_SIZE - state.camera.y + shakeY + TILE_SIZE / 2 + 2,
       18,
       { view: "topdown", blink: Math.floor(blinkClock * 5) % 2 === 0, facing: state.player.direction },
     );
@@ -1911,7 +2818,11 @@ function startGame(root) {
     ctx.fillStyle = "#f1e4c9";
     ctx.fillText?.("HP", 0, 0);
 
-    saveAutosave(state);
+    state.autosaveTimer += dt;
+    if (state.autosaveTimer >= 5) {
+      state.autosaveTimer = 0;
+      saveAutosave(state);
+    }
 
     requestAnimationFrame(updateLoop);
   }
@@ -1946,7 +2857,9 @@ function startGame(root) {
         input.confirm = true;
         break;
       case "escape":
-        if (state.mode === "dialogue") {
+        if (activeModalCloser) {
+          activeModalCloser();
+        } else if (state.mode === "dialogue") {
           state.dialogue = null;
           state.mode = "playing";
           refs.overlayLayer.querySelector(".dialogue-panel")?.remove();
@@ -2063,7 +2976,6 @@ function startGame(root) {
     state.player.name = save.name ?? state.player.name;
     if (!state.flags.introSeen) {
       openIntroCutscene();
-      state.flags.introSeen = true;
     }
   }
 
