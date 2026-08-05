@@ -40,6 +40,7 @@ import {
   createCamera,
   positionCamera,
 } from "./viewport.js";
+import { dialogueIdForNpc, findNearbyNpc, shouldPreferNpcInteraction } from "./interaction.js";
 
 const TILE_SIZE = 16;
 const SAVE_HINT = "Autosaves are stored locally in this browser. Refreshing should not wipe progress.";
@@ -1084,13 +1085,13 @@ function updateHUD(refs, state, scene, musicLabel) {
   const guardians = state.reputation?.guardians ?? 0;
   refs.standing.textContent = `${villagers >= 0 ? "+" : ""}${villagers}/${merchants >= 0 ? "+" : ""}${merchants}/${spirits >= 0 ? "+" : ""}${spirits}/${guardians >= 0 ? "+" : ""}${guardians}`;
   refs.objective.textContent = questStepLabel(QUESTS.brokenLantern, state);
-  refs.hint.textContent = state.mode === "combat"
-    ? "Combat: move to dodge, press Space to strike."
-    : state.mode === "dialogue"
-      ? "Choose a reply. Your earlier decisions will come back later. Annoying, but on brand."
-      : state.mode === "ending"
-        ? "The first chapter is complete. New Game + is unlocked for this save."
-        : "Explore Alderwood, talk to everyone, and keep an eye out for the fox's sarcasm.";
+  if (state.mode === "combat") {
+    refs.hint.textContent = "Combat: move to dodge, press Space to strike.";
+  } else if (state.mode === "dialogue") {
+    refs.hint.textContent = "Choose a reply. Your earlier decisions will come back later. Annoying, but on brand.";
+  } else if (state.mode === "ending") {
+    refs.hint.textContent = "The first chapter is complete. New Game + is unlocked for this save.";
+  }
 }
 
 function showPanel(panel, visible = true) {
@@ -1569,9 +1570,10 @@ function createEndingHTML(state) {
   `;
 }
 
-function currentHintText(state, scene, nearby) {
+function currentHintText(state, scene, nearby, nearbyNpc = null) {
   if (state.mode === "dialogue") return "Dialogue: select a response or press Enter to confirm.";
   if (state.mode === "combat") return "A wisp is here. Strike it with Space or the action button.";
+  if (nearbyNpc) return `Press E to talk to ${nearbyNpc.name}.`;
   if (nearby?.type === "door") return `Press E to enter ${nearby.label}.`;
   if (nearby?.type === "wardrobe") return "Press E to open the mirror and wardrobe.";
   if (nearby?.type === "lantern") return "Press E to inspect the broken lantern.";
@@ -1961,7 +1963,7 @@ function updateDialoguePanel(refs, state, canvas, toast, callback) {
       </div>
     `);
     panel.className = "panel dialogue-panel";
-    panel.querySelector(".panel__header").remove();
+    panel.querySelector(".modal-header")?.remove();
     refs.overlayLayer.appendChild(panel);
     callback?.(panel);
   }
@@ -2001,7 +2003,9 @@ function updateDialoguePanel(refs, state, canvas, toast, callback) {
     }
   }
   if (text) text.textContent = node.text;
-  if (choices) {
+  const choiceSetId = `${state.activeNpc ?? dialogue.speaker}:${node.id}`;
+  if (choices && choices.dataset.choiceSet !== choiceSetId) {
+    choices.dataset.choiceSet = choiceSetId;
     choices.innerHTML = "";
     for (const choice of node.choices) {
       const button = document.createElement("button");
@@ -2134,10 +2138,27 @@ function activeNearbyInteractable(state, scene) {
   });
 }
 
+function activeNearbyNpc(state, scene) {
+  return findNearbyNpc(state.player, scene.npcs);
+}
+
+function beginNpcDialogue(state, npc) {
+  const dialogueId = dialogueIdForNpc(npc);
+  if (!dialogueId) return false;
+  registerCharacter(state, npc.name);
+  openDialogue(state, dialogueId);
+  return true;
+}
+
 function handleCurrentInteraction(state, refs, toast, audio, setModalState) {
   const scene = getScene(state.scene);
   const nearby = activeNearbyInteractable(state, scene);
+  const nearbyNpc = activeNearbyNpc(state, scene);
   if (state.mode === "dialogue" || state.mode === "editor" || state.mode === "ending") return;
+
+  if (shouldPreferNpcInteraction(state.player, nearbyNpc, nearby) && beginNpcDialogue(state, nearbyNpc)) {
+    return;
+  }
 
   if (nearby?.type === "door") {
     setScene(state, nearby.target, nearby.spawn, nearby.label);
@@ -2271,23 +2292,6 @@ function handleCurrentInteraction(state, refs, toast, audio, setModalState) {
   if (nearby?.type === "merchant") {
     adjustReputation(state, "merchants", 1);
     openDialogue(state, "merchant");
-    return;
-  }
-
-  const npc = scene.npcs.find((actor) => {
-    if (actor.hidden) return false;
-    const dx = Math.abs(actor.x - state.player.x);
-    const dy = Math.abs(actor.y - state.player.y);
-    return dx <= 1.25 && dy <= 1.25;
-  });
-  if (npc) {
-    registerCharacter(state, npc.name);
-    if (npc.id === "fox") {
-      openDialogue(state, "foxIntro");
-    } else {
-      const dialogueId = npc.id === "elder" ? "elderRowan" : npc.id === "deer" ? "forestSpirit" : npc.id;
-      openDialogue(state, dialogueId);
-    }
     return;
   }
 
@@ -2932,7 +2936,9 @@ function handleCombatAction() {
           handleCombatAction();
         }
         const nearby = activeNearbyInteractable(state, scene);
-        refs.hint.textContent = currentHintText(state, scene, nearby);
+        const nearbyNpc = activeNearbyNpc(state, scene);
+        const preferredNpc = shouldPreferNpcInteraction(state.player, nearbyNpc, nearby) ? nearbyNpc : null;
+        refs.hint.textContent = currentHintText(state, scene, nearby, preferredNpc);
       }
       updateHUD(refs, state, scene, sceneMusic(state.scene));
     }
@@ -2999,6 +3005,12 @@ function handleCombatAction() {
         setModalState(false);
         state.mode = "playing";
       }
+      return;
+    }
+
+    if (state.mode === "dialogue" && (key === "enter" || key === " ")) {
+      event.preventDefault();
+      refs.overlayLayer.querySelector(".dialogue-choice")?.click();
       return;
     }
 

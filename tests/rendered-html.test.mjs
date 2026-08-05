@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { dialogueIdForNpc, findNearbyNpc, shouldPreferNpcInteraction } from "../interaction.js";
 import { calculateViewport, createCamera, positionCamera } from "../viewport.js";
 
 const htmlPreview = /<title>Echoes of Alderwood<\/title>/i;
@@ -40,7 +41,7 @@ test("server-renders the Alderwood game shell", async () => {
 });
 
 test("keeps the standalone asset entrypoint available", async () => {
-  const [index, styles, game, player, world, quests, dialogue, saveSystem, avatarEditor, viewport] =
+  const [index, styles, game, player, world, quests, dialogue, saveSystem, avatarEditor, viewport, interaction] =
     await Promise.all([
       readFile(new URL("../index.html", import.meta.url), "utf8"),
       readFile(new URL("../styles.css", import.meta.url), "utf8"),
@@ -52,6 +53,7 @@ test("keeps the standalone asset entrypoint available", async () => {
       readFile(new URL("../save-system.js", import.meta.url), "utf8"),
       readFile(new URL("../avatar-editor.js", import.meta.url), "utf8"),
       readFile(new URL("../viewport.js", import.meta.url), "utf8"),
+      readFile(new URL("../interaction.js", import.meta.url), "utf8"),
     ]);
 
   assert.match(index, /Echoes of Alderwood/);
@@ -66,6 +68,39 @@ test("keeps the standalone asset entrypoint available", async () => {
   assert.match(avatarEditor, /openAvatarEditor/);
   assert.match(viewport, /calculateViewport/);
   assert.match(viewport, /positionCamera/);
+  assert.match(interaction, /findNearbyNpc/);
+});
+
+test("selects the nearest visible NPC and maps it to dialogue", () => {
+  const player = { x: 10, y: 10 };
+  const npc = findNearbyNpc(player, [
+    { id: "baker", name: "Tilda", x: 11.6, y: 10 },
+    { id: "elder", name: "Elder Rowan", x: 11, y: 10 },
+    { id: "smith", name: "Brann", x: 10.5, y: 10, hidden: true },
+  ]);
+
+  assert.equal(npc?.id, "elder");
+  assert.equal(dialogueIdForNpc(npc), "elderRowan");
+  assert.equal(dialogueIdForNpc({ id: "fox" }), "foxIntro");
+});
+
+test("prefers NPC chat unless the player is directly using a prop", () => {
+  const player = { x: 10, y: 10 };
+  const npc = { id: "herbalist", x: 11, y: 10 };
+
+  assert.equal(shouldPreferNpcInteraction(player, npc, null), true);
+  assert.equal(
+    shouldPreferNpcInteraction(player, npc, { type: "item", x: 10, y: 10, w: 1, h: 1 }),
+    false,
+  );
+  assert.equal(
+    shouldPreferNpcInteraction(player, npc, { type: "item", x: 11, y: 10, w: 1, h: 1 }),
+    true,
+  );
+  assert.equal(
+    shouldPreferNpcInteraction(player, npc, { type: "door", x: 12, y: 10, w: 1, h: 2 }),
+    false,
+  );
 });
 
 test("calculates an integer-scaled canvas without distorting its logical viewport", () => {
