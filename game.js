@@ -31,9 +31,16 @@ import {
   saveSlot,
 } from "./save-system.js";
 import { openAvatarEditor } from "./avatar-editor.js";
+import {
+  BASE_LOGICAL_HEIGHT,
+  BASE_LOGICAL_WIDTH,
+  calculateViewport,
+  clearInputState,
+  configureCanvas,
+  createCamera,
+  positionCamera,
+} from "./viewport.js";
 
-const VIEW_WIDTH = 960;
-const VIEW_HEIGHT = 640;
 const TILE_SIZE = 16;
 const SAVE_HINT = "Autosaves are stored locally in this browser. Refreshing should not wipe progress.";
 const FACTIONS = {
@@ -376,7 +383,11 @@ function createState() {
     day: 1,
     weatherCycle: 0,
     screenShake: 0,
-    camera: { x: 0, y: 0 },
+    camera: createCamera(),
+    viewport: {
+      ...calculateViewport(BASE_LOGICAL_WIDTH, BASE_LOGICAL_HEIGHT, 1),
+      fps: 0,
+    },
     transition: null,
     ui: {
       journalOpen: false,
@@ -464,6 +475,32 @@ function hydrateStateFromSave(save) {
   return state;
 }
 
+function replaceStatePreservingViewport(state, nextState) {
+  const viewport = state.viewport;
+  const cameraViewport = {
+    viewportWidth: state.camera.viewportWidth,
+    viewportHeight: state.camera.viewportHeight,
+    zoom: state.camera.zoom,
+  };
+  Object.assign(state, nextState);
+  state.viewport = viewport;
+  Object.assign(state.camera, cameraViewport);
+
+  const scene = getScene(state.scene);
+  positionCamera(
+    state.camera,
+    {
+      x: state.player.x * TILE_SIZE,
+      y: state.player.y * TILE_SIZE,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+    },
+    scene.width * TILE_SIZE,
+    scene.height * TILE_SIZE,
+    { immediate: true },
+  );
+}
+
 function keyOf(entity) {
   return entity ? `${entity.id}:${entity.scene ?? entity.target ?? ""}` : "none";
 }
@@ -475,8 +512,8 @@ function intersects(ax, ay, aw, ah, bx, by, bw, bh) {
 function createGameCanvas() {
   const canvas = document.createElement("canvas");
   canvas.id = "viewport";
-  canvas.width = VIEW_WIDTH;
-  canvas.height = VIEW_HEIGHT;
+  canvas.width = BASE_LOGICAL_WIDTH;
+  canvas.height = BASE_LOGICAL_HEIGHT;
   canvas.setAttribute("aria-label", "Echoes of Alderwood game screen");
   return canvas;
 }
@@ -655,18 +692,23 @@ function renderTile(ctx, tile, x, y, t) {
   }
 }
 
-function drawScene(ctx, scene, camera, t, weather, state) {
-  const startX = Math.floor(camera.x / TILE_SIZE);
-  const startY = Math.floor(camera.y / TILE_SIZE);
-  const endX = Math.ceil((camera.x + VIEW_WIDTH) / TILE_SIZE);
-  const endY = Math.ceil((camera.y + VIEW_HEIGHT) / TILE_SIZE);
-
+function drawSceneBackground(ctx, scene, viewportWidth, viewportHeight) {
   const sky = scene.id === "forest" ? "#0c1522" : scene.id === "home" ? "#1c1b29" : "#22313f";
   const horizon = scene.id === "forest" ? "#2d3742" : "#415869";
   ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+  ctx.fillRect(0, 0, viewportWidth, viewportHeight);
   ctx.fillStyle = horizon;
-  ctx.fillRect(0, 0, VIEW_WIDTH, 130);
+  ctx.fillRect(0, 0, viewportWidth, Math.min(130, viewportHeight * 0.34));
+}
+
+function drawScene(ctx, scene, camera, t) {
+  const startX = Math.max(0, Math.floor(camera.x / TILE_SIZE) - 1);
+  const startY = Math.max(0, Math.floor(camera.y / TILE_SIZE) - 1);
+  const endX = Math.min(scene.width - 1, Math.ceil((camera.x + camera.viewportWidth) / TILE_SIZE) + 1);
+  const endY = Math.min(scene.height - 1, Math.ceil((camera.y + camera.viewportHeight) / TILE_SIZE) + 1);
+
+  ctx.fillStyle = "rgba(3, 5, 8, 0.48)";
+  ctx.fillRect(-4, -4, scene.width * TILE_SIZE + 8, scene.height * TILE_SIZE + 8);
 
   for (let y = startY; y <= endY; y += 1) {
     for (let x = startX; x <= endX; x += 1) {
@@ -675,13 +717,17 @@ function drawScene(ctx, scene, camera, t, weather, state) {
       renderTile(ctx, tile, x, y, t);
     }
   }
+}
 
+function drawSceneAtmosphere(ctx, scene, camera, t, weather, state) {
+  const viewportWidth = camera.viewportWidth;
+  const viewportHeight = camera.viewportHeight;
   // Weather overlays and atmosphere.
   if (weather === "rain") {
     ctx.strokeStyle = "rgba(157, 195, 235, 0.45)";
     for (let i = 0; i < 80; i += 1) {
-      const x = (i * 31 + t * 180) % VIEW_WIDTH;
-      const y = (i * 53 + t * 240) % VIEW_HEIGHT;
+      const x = (i * 31 + t * 180) % viewportWidth;
+      const y = (i * 53 + t * 240) % viewportHeight;
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x - 5, y + 10);
@@ -690,25 +736,25 @@ function drawScene(ctx, scene, camera, t, weather, state) {
   } else if (weather === "fog") {
     ctx.fillStyle = "rgba(223, 230, 238, 0.08)";
     for (let i = 0; i < 6; i += 1) {
-      ctx.fillRect(0, 100 + i * 70 + Math.sin(t * 0.9 + i) * 18, VIEW_WIDTH, 36);
+      ctx.fillRect(0, 40 + i * 70 + Math.sin(t * 0.9 + i) * 18, viewportWidth, 36);
     }
   } else if (weather === "leaves") {
     ctx.fillStyle = "#d9a94d";
     for (let i = 0; i < 24; i += 1) {
-      const x = (i * 67 + t * 60) % VIEW_WIDTH;
-      const y = (i * 41 + t * 120) % VIEW_HEIGHT;
+      const x = (i * 67 + t * 60) % viewportWidth;
+      const y = (i * 41 + t * 120) % viewportHeight;
       ctx.fillRect(x, y, 3, 2);
     }
   } else if (weather === "thunder") {
     ctx.fillStyle = "rgba(195, 220, 255, 0.08)";
-    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.fillRect(0, 0, viewportWidth, viewportHeight);
     ctx.fillStyle = "rgba(244, 247, 255, 0.18)";
-    ctx.fillRect((Math.sin(t * 5) + 1) * VIEW_WIDTH * 0.3, 0, VIEW_WIDTH * 0.4, VIEW_HEIGHT);
+    ctx.fillRect((Math.sin(t * 5) + 1) * viewportWidth * 0.3, 0, viewportWidth * 0.4, viewportHeight);
   } else if (weather === "snow") {
     ctx.fillStyle = "rgba(237, 242, 255, 0.85)";
     for (let i = 0; i < 36; i += 1) {
-      const x = (i * 91 + t * 32) % VIEW_WIDTH;
-      const y = (i * 43 + t * 60) % VIEW_HEIGHT;
+      const x = (i * 91 + t * 32) % viewportWidth;
+      const y = (i * 43 + t * 60) % viewportHeight;
       ctx.fillRect(x, y, 2, 2);
     }
   }
@@ -716,34 +762,42 @@ function drawScene(ctx, scene, camera, t, weather, state) {
   // Ambient darkness deepens as the story begins to fray.
   const dusk = state.flags.lanternRestored ? 0.02 : scene.id === "forest" ? 0.18 : 0.1;
   ctx.fillStyle = `rgba(6, 8, 12, ${dusk + Math.max(0, Math.sin(t * 0.05) * 0.02)})`;
-  ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+  ctx.fillRect(0, 0, viewportWidth, viewportHeight);
 
   const isNight = state.timeLabel === "Night";
   if (isNight || weather === "thunder") {
+    const glowX = state.player.x * TILE_SIZE - camera.x + TILE_SIZE / 2;
+    const glowY = state.player.y * TILE_SIZE - camera.y + TILE_SIZE / 2;
+    const glowRadius = Math.min(240, Math.max(120, viewportWidth * 0.3));
     const glow = ctx.createRadialGradient(
-      VIEW_WIDTH * 0.52,
-      VIEW_HEIGHT * 0.58,
+      glowX,
+      glowY,
       24,
-      VIEW_WIDTH * 0.52,
-      VIEW_HEIGHT * 0.58,
-      240,
+      glowX,
+      glowY,
+      glowRadius,
     );
     glow.addColorStop(0, "rgba(255, 230, 150, 0.18)");
     glow.addColorStop(0.5, "rgba(255, 230, 150, 0.06)");
     glow.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.fillRect(0, 0, viewportWidth, viewportHeight);
     ctx.fillStyle = "rgba(0,0,0,0.16)";
-    ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.fillRect(0, 0, viewportWidth, viewportHeight);
   }
 }
 
 function drawPropsAndActors(ctx, scene, state, t, blinkOn) {
   const camera = state.camera;
   const drawEntity = (entity, colorSet = {}) => {
-    const sx = entity.x * TILE_SIZE - camera.x;
-    const sy = entity.y * TILE_SIZE - camera.y;
-    if (sx < -40 || sy < -40 || sx > VIEW_WIDTH + 40 || sy > VIEW_HEIGHT + 40) return;
+    const sx = entity.x * TILE_SIZE;
+    const sy = entity.y * TILE_SIZE;
+    if (
+      sx < camera.x - 40 ||
+      sy < camera.y - 40 ||
+      sx > camera.x + camera.viewportWidth + 40 ||
+      sy > camera.y + camera.viewportHeight + 40
+    ) return;
 
     if (entity.kind === "fox") {
       const mood = state.foxState?.mood ?? "curious";
@@ -840,8 +894,8 @@ function drawPropsAndActors(ctx, scene, state, t, blinkOn) {
 
   if (state.combat?.enemy) {
     const enemy = state.combat.enemy;
-    const sx = enemy.x * TILE_SIZE - camera.x;
-    const sy = enemy.y * TILE_SIZE - camera.y;
+    const sx = enemy.x * TILE_SIZE;
+    const sy = enemy.y * TILE_SIZE;
     ctx.fillStyle = "#6d2a6f";
     ctx.fillRect(sx + 2, sy + 2, 12, 12);
     ctx.fillStyle = "#d884da";
@@ -851,8 +905,8 @@ function drawPropsAndActors(ctx, scene, state, t, blinkOn) {
   }
 
   for (const particle of state.particles) {
-    const sx = particle.x - camera.x;
-    const sy = particle.y - camera.y;
+    const sx = particle.x;
+    const sy = particle.y;
     ctx.fillStyle = particle.color;
     ctx.globalAlpha = clamp(particle.alpha, 0, 1);
     ctx.fillRect(sx, sy, particle.size, particle.size);
@@ -915,11 +969,11 @@ function initDOM(root) {
       <div class="brand__subtitle">Restoring lanterns, one regrettable decision at a time.</div>
     </div>
     <div class="hud-strip">
-      <div class="hud-chip">Chapter <strong data-chapter>1</strong></div>
-      <div class="hud-chip">Location <strong data-location>Foxglove House</strong></div>
-      <div class="hud-chip">Time <strong data-time>Dawn</strong></div>
-      <div class="hud-chip">Music <strong data-music>Memory Room</strong></div>
-      <div class="hud-chip">Standing <strong data-standing>Neutral</strong></div>
+      <div class="hud-chip" aria-label="Current chapter"><span class="hud-chip__label">Chapter</span><strong data-chapter>1</strong></div>
+      <div class="hud-chip" aria-label="Current location"><span class="hud-chip__label">Location</span><strong data-location>Foxglove House</strong></div>
+      <div class="hud-chip" aria-label="Current time"><span class="hud-chip__label">Time</span><strong data-time>Dawn</strong></div>
+      <div class="hud-chip" aria-label="Current music"><span class="hud-chip__label">Music</span><strong data-music>Memory Room</strong></div>
+      <div class="hud-chip" aria-label="Faction standing"><span class="hud-chip__label">Standing</span><strong data-standing>Neutral</strong></div>
     </div>
     <div class="hud-actions">
       <button class="btn btn--ghost" data-journal type="button">Journal</button>
@@ -939,6 +993,9 @@ function initDOM(root) {
   overlayLayer.className = "overlay-layer";
   const fade = document.createElement("div");
   fade.className = "fade-cover";
+  const viewportDiagnostics = document.createElement("pre");
+  viewportDiagnostics.className = "viewport-diagnostics hidden";
+  viewportDiagnostics.setAttribute("aria-hidden", "true");
   const mobileControls = document.createElement("div");
   mobileControls.className = "mobile-controls";
   mobileControls.innerHTML = `
@@ -956,14 +1013,18 @@ function initDOM(root) {
       <button class="mobile-btn" data-key="attack">Hit</button>
     </div>
   `;
-  frame.append(canvas, overlayLayer, fade, mobileControls);
+  frame.append(canvas, overlayLayer, fade, viewportDiagnostics, mobileControls);
   stage.appendChild(frame);
 
   const footer = document.createElement("footer");
   footer.className = "footer-hint";
   footer.innerHTML = `
-    <div data-hint>WASD / Arrows to move. Hold Shift to run. Press E or Space to interact.</div>
-    <div><span class="hint-key">Esc</span> pause <span class="hint-key">I</span> journal <span class="hint-key">M</span> map</div>
+    <div class="footer-objective">
+      <span class="footer-label">Objective</span>
+      <strong data-objective>Wake in your home and meet Ember.</strong>
+    </div>
+    <div class="footer-context" data-hint>WASD / Arrows to move. Hold Shift to run. Press E or Space to interact.</div>
+    <div class="footer-controls"><span class="hint-key">Esc</span> pause <span class="hint-key">I</span> journal <span class="hint-key">M</span> map</div>
   `;
 
   shell.append(header, stage, footer);
@@ -972,11 +1033,15 @@ function initDOM(root) {
   return {
     shell,
     header,
+    stage,
+    frame,
     canvas,
     overlayLayer,
     fade,
     footer,
+    objective: footer.querySelector("[data-objective]"),
     hint: footer.querySelector("[data-hint]"),
+    viewportDiagnostics,
     chapter: header.querySelector("[data-chapter]"),
     location: header.querySelector("[data-location]"),
     time: header.querySelector("[data-time]"),
@@ -1018,6 +1083,7 @@ function updateHUD(refs, state, scene, musicLabel) {
   const spirits = state.reputation?.spirits ?? 0;
   const guardians = state.reputation?.guardians ?? 0;
   refs.standing.textContent = `${villagers >= 0 ? "+" : ""}${villagers}/${merchants >= 0 ? "+" : ""}${merchants}/${spirits >= 0 ? "+" : ""}${spirits}/${guardians >= 0 ? "+" : ""}${guardians}`;
+  refs.objective.textContent = questStepLabel(QUESTS.brokenLantern, state);
   refs.hint.textContent = state.mode === "combat"
     ? "Combat: move to dodge, press Space to strike."
     : state.mode === "dialogue"
@@ -1834,7 +1900,7 @@ function openWardrobeEditor(state, refs, onComplete) {
 
 function startNewGame(state, refs, toast, audio, afterCreation) {
   const newState = createState();
-  Object.assign(state, newState);
+  replaceStatePreservingViewport(state, newState);
   audio.start();
   audio.setScene(state.scene);
   toast.show("New game created. The village is waiting.");
@@ -2033,8 +2099,18 @@ function setScene(state, sceneId, spawn = null, reason = "") {
     state.player.x = Math.floor(scene.width / 2);
     state.player.y = Math.floor(scene.height / 2);
   }
-  state.camera.x = state.player.x * TILE_SIZE - VIEW_WIDTH / 2;
-  state.camera.y = state.player.y * TILE_SIZE - VIEW_HEIGHT / 2;
+  positionCamera(
+    state.camera,
+    {
+      x: state.player.x * TILE_SIZE,
+      y: state.player.y * TILE_SIZE,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+    },
+    scene.width * TILE_SIZE,
+    scene.height * TILE_SIZE,
+    { immediate: true },
+  );
   state.transition = { alpha: 1, reason };
   state.timeLabel = phaseLabelForMinutes(state.minutes);
   state.weather = weatherForState(state);
@@ -2058,7 +2134,7 @@ function activeNearbyInteractable(state, scene) {
   });
 }
 
-function useCurrentInteraction(state, refs, toast, audio, setModalState) {
+function handleCurrentInteraction(state, refs, toast, audio, setModalState) {
   const scene = getScene(state.scene);
   const nearby = activeNearbyInteractable(state, scene);
   if (state.mode === "dialogue" || state.mode === "editor" || state.mode === "ending") return;
@@ -2284,12 +2360,19 @@ function playerMove(state, scene, input, dt) {
 }
 
 function updateCamera(state, dt) {
-  const targetX = state.player.x * TILE_SIZE - VIEW_WIDTH / 2 + TILE_SIZE / 2;
-  const targetY = state.player.y * TILE_SIZE - VIEW_HEIGHT / 2 + TILE_SIZE / 2;
-  state.camera.x = lerp(state.camera.x, targetX, 0.08 + dt * 0.04);
-  state.camera.y = lerp(state.camera.y, targetY, 0.08 + dt * 0.04);
-  state.camera.x = clamp(state.camera.x, 0, getScene(state.scene).width * TILE_SIZE - VIEW_WIDTH);
-  state.camera.y = clamp(state.camera.y, 0, getScene(state.scene).height * TILE_SIZE - VIEW_HEIGHT);
+  const scene = getScene(state.scene);
+  positionCamera(
+    state.camera,
+    {
+      x: state.player.x * TILE_SIZE,
+      y: state.player.y * TILE_SIZE,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+    },
+    scene.width * TILE_SIZE,
+    scene.height * TILE_SIZE,
+    { dt },
+  );
 }
 
 function maybeAdvanceTime(state, dt) {
@@ -2340,6 +2423,39 @@ function startGame(root) {
   const state = hydrateStateFromSave(save);
   audio.setScene(state.scene);
   let activeModalCloser = null;
+  let resizeObserver = null;
+  const diagnosticsEnabled = new URLSearchParams(window.location.search).get("viewportDebug") === "1";
+  refs.viewportDiagnostics.classList.toggle("hidden", !diagnosticsEnabled);
+
+  function syncViewport() {
+    const rect = refs.stage.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return;
+
+    const viewport = calculateViewport(rect.width, rect.height, window.devicePixelRatio || 1);
+    Object.assign(state.viewport, viewport);
+    configureCanvas(canvas, state.camera, viewport);
+    ctx.imageSmoothingEnabled = false;
+
+    const scene = getScene(state.scene);
+    positionCamera(
+      state.camera,
+      {
+        x: state.player.x * TILE_SIZE,
+        y: state.player.y * TILE_SIZE,
+        width: TILE_SIZE,
+        height: TILE_SIZE,
+      },
+      scene.width * TILE_SIZE,
+      scene.height * TILE_SIZE,
+      { immediate: true },
+    );
+
+    canvas.dataset.cssSize = `${viewport.cssWidth}x${viewport.cssHeight}`;
+    canvas.dataset.bufferSize = `${viewport.bufferWidth}x${viewport.bufferHeight}`;
+    canvas.dataset.logicalSize = `${viewport.logicalWidth}x${viewport.logicalHeight}`;
+    canvas.dataset.renderScale = String(viewport.renderScale);
+    renderFrame(performance.now());
+  }
 
   function setModalState(isOpen, closer = null) {
     state.ui.modalOpen = isOpen;
@@ -2352,16 +2468,13 @@ function startGame(root) {
       state.ui.dialogueOpen = false;
       state.ui.editorOpen = false;
       state.ui.pauseOpen = false;
+      if (state.mode === "paused") state.mode = "playing";
     }
     refs.overlayLayer.classList.toggle("is-modal-open", isOpen);
     refs.shell.classList.toggle("is-modal-open", isOpen);
     document.body.classList.toggle("modal-open", isOpen);
     activeModalCloser = isOpen ? closer : null;
-    if (isOpen) {
-      input.up = input.down = input.left = input.right = false;
-      input.run = input.action = input.attack = input.interact = false;
-      input.confirm = input.cancel = false;
-    }
+    clearInputState(input);
   }
 
   refs.overlayLayer.addEventListener("click", (event) => {
@@ -2404,7 +2517,7 @@ function startGame(root) {
     titlePanel.querySelector("[data-continue]")?.addEventListener("click", () => {
       const latest = loadLatestSave();
       if (latest) {
-        Object.assign(state, hydrateStateFromSave(latest));
+        replaceStatePreservingViewport(state, hydrateStateFromSave(latest));
         state.mode = "playing";
         titlePanel?.remove();
         titlePanel = null;
@@ -2444,7 +2557,7 @@ function startGame(root) {
         const slot = Number(button.getAttribute("data-load-slot"));
         const loaded = loadSlot(slot) ?? loadLatestSave();
         if (loaded) {
-          Object.assign(state, hydrateStateFromSave(loaded));
+          replaceStatePreservingViewport(state, hydrateStateFromSave(loaded));
           state.mode = "playing";
           savePanel?.remove();
           setModalState(false);
@@ -2479,7 +2592,7 @@ function startGame(root) {
       const field = savePanel.querySelector("[data-save-data]");
       try {
         const imported = importSaveData(field.value);
-        Object.assign(state, hydrateStateFromSave(imported));
+        replaceStatePreservingViewport(state, hydrateStateFromSave(imported));
         state.mode = "playing";
         toast.show("Save data imported.");
         savePanel?.remove();
@@ -2642,7 +2755,7 @@ function startGame(root) {
         hairstyles: [...new Set([...(state.unlockedOutfits.hairstyles ?? []), "fox-tuft"])],
       };
       reset.player.appearance = mergeAppearance(reset.player.appearance, state.player.appearance);
-      Object.assign(state, reset);
+      replaceStatePreservingViewport(state, reset);
       state.mode = "playing";
       startNewGame(state, refs, toast, audio, () => {
         state.mode = "cutscene";
@@ -2716,54 +2829,112 @@ function handleCombatAction() {
     }
   }
 
+  function renderFrame(now) {
+    const scene = getScene(state.scene);
+    const viewport = state.viewport;
+    const bufferScale = viewport.bufferScale || 1;
+    const blink = Math.floor(blinkClock * 4) % 2 === 0;
+    const shakeX = state.screenShake ? Math.round((Math.random() - 0.5) * state.screenShake * 10) : 0;
+    const shakeY = state.screenShake ? Math.round((Math.random() - 0.5) * state.screenShake * 8) : 0;
+    const renderCamera = {
+      ...state.camera,
+      x: state.camera.x + shakeX,
+      y: state.camera.y + shakeY,
+    };
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(bufferScale, 0, 0, bufferScale, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+
+    drawSceneBackground(ctx, scene, state.camera.viewportWidth, state.camera.viewportHeight);
+    ctx.save();
+    ctx.translate(-Math.round(renderCamera.x), -Math.round(renderCamera.y));
+    drawScene(ctx, scene, renderCamera, now / 1000);
+    drawPropsAndActors(
+      ctx,
+      scene,
+      { ...state, camera: renderCamera },
+      now / 1000,
+      blink,
+    );
+    drawAvatar(
+      ctx,
+      state.player.appearance,
+      state.player.x * TILE_SIZE + TILE_SIZE / 2,
+      state.player.y * TILE_SIZE + TILE_SIZE / 2 + 2,
+      18,
+      { view: "topdown", blink: Math.floor(blinkClock * 5) % 2 === 0, facing: state.player.direction },
+    );
+    ctx.restore();
+
+    drawSceneAtmosphere(ctx, scene, renderCamera, now / 1000, state.weather, state);
+
+    // Health and energy stay in screen space while the world moves beneath them.
+    ctx.fillStyle = "rgba(6,8,12,0.85)";
+    ctx.fillRect(12, 12, 156, 34);
+    ctx.fillStyle = "#fff2bf";
+    ctx.fillRect(16, 16, clamp(state.player.health, 0, state.player.maxHealth) * 1.4, 8);
+    ctx.fillStyle = "#83d8af";
+    ctx.fillRect(16, 28, clamp(state.player.energy, 0, state.player.maxEnergy) * 1.4, 6);
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    if (diagnosticsEnabled) {
+      refs.viewportDiagnostics.textContent = [
+        `Canvas CSS: ${viewport.cssWidth} x ${viewport.cssHeight}`,
+        `Canvas buffer: ${canvas.width} x ${canvas.height}`,
+        `Logical viewport: ${state.camera.viewportWidth} x ${state.camera.viewportHeight}`,
+        `Render scale: ${viewport.renderScale}x (buffer ${bufferScale}x, DPR ${viewport.devicePixelRatio.toFixed(2)})`,
+        `Camera: ${state.camera.x.toFixed(1)}, ${state.camera.y.toFixed(1)}`,
+        `Player: ${state.player.x.toFixed(2)}, ${state.player.y.toFixed(2)}`,
+        `Map: ${scene.width * TILE_SIZE} x ${scene.height * TILE_SIZE}`,
+        `FPS: ${Math.round(viewport.fps || 0)}`,
+      ].join("\n");
+    }
+  }
+
   function updateLoop(now) {
     if (!running) return;
     const dt = Math.min(0.032, (now - last) / 1000);
     last = now;
     blinkClock += dt;
+    if (dt > 0) {
+      const instantaneousFps = 1 / dt;
+      state.viewport.fps = state.viewport.fps
+        ? state.viewport.fps * 0.9 + instantaneousFps * 0.1
+        : instantaneousFps;
+    }
     state.screenShake = Math.max(0, state.screenShake - dt * 1.8);
     audio.tick(dt, state);
+    if (state.mode !== "playing" && state.mode !== "combat") clearInputState(input);
 
     if (state.mode === "playing" || state.mode === "combat") {
-      if (state.ui.modalOpen) {
-        updateHUD(refs, state, getScene(state.scene), sceneMusic(state.scene));
-        ctx.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-        drawScene(ctx, getScene(state.scene), state.camera, now / 1000, state.weather, state);
-        drawPropsAndActors(ctx, getScene(state.scene), state, now / 1000, Math.floor(blinkClock * 4) % 2 === 0);
-        drawAvatar(
-          ctx,
-          state.player.appearance,
-          state.player.x * TILE_SIZE - state.camera.x + TILE_SIZE / 2,
-          state.player.y * TILE_SIZE - state.camera.y + TILE_SIZE / 2 + 2,
-          18,
-          { view: "topdown", blink: Math.floor(blinkClock * 5) % 2 === 0, facing: state.player.direction },
-        );
-        requestAnimationFrame(updateLoop);
-        return;
-      }
       const scene = getScene(state.scene);
-      if (state.mode === "playing") {
-        playerMove(state, scene, input, dt);
+      if (!state.ui.modalOpen) {
+        if (state.mode === "playing") {
+          playerMove(state, scene, input, dt);
+        }
+        updateCamera(state, dt);
+        maybeAdvanceTime(state, dt);
+        updateNpcSchedules(state, scene);
+        updateFoxCompanion(state, scene, dt);
+        applyWeatherEffects(state, scene, dt);
+        updateParticles(state, dt);
+        if (state.player.attackCooldown > 0) state.player.attackCooldown = Math.max(0, state.player.attackCooldown - dt);
+        if (state.mode === "combat") updateCombat(state, dt, toast);
+        if (input.interact || input.action) {
+          input.interact = input.action = false;
+          handleCurrentInteraction(state, refs, toast, audio, setModalState);
+        }
+        if (input.attack) {
+          input.attack = false;
+          handleCombatAction();
+        }
+        const nearby = activeNearbyInteractable(state, scene);
+        refs.hint.textContent = currentHintText(state, scene, nearby);
       }
-      updateCamera(state, dt);
-      maybeAdvanceTime(state, dt);
-      updateNpcSchedules(state, scene);
-      updateFoxCompanion(state, scene, dt);
-      applyWeatherEffects(state, scene, dt);
-      updateParticles(state, dt);
-      if (state.player.attackCooldown > 0) state.player.attackCooldown = Math.max(0, state.player.attackCooldown - dt);
-      if (state.mode === "combat") updateCombat(state, dt, toast);
-      if (input.interact || input.action) {
-        input.interact = input.action = false;
-        useCurrentInteraction(state, refs, toast, audio, setModalState);
-      }
-      if (input.attack) {
-        input.attack = false;
-        handleCombatAction();
-      }
-      const nearby = activeNearbyInteractable(state, scene);
       updateHUD(refs, state, scene, sceneMusic(state.scene));
-      refs.hint.textContent = currentHintText(state, scene, nearby);
     }
 
     if (state.mode === "dialogue") {
@@ -2791,32 +2962,7 @@ function handleCombatAction() {
       }
     }
 
-    const scene = getScene(state.scene);
-    const shakeX = state.screenShake ? Math.round((Math.random() - 0.5) * state.screenShake * 10) : 0;
-    const shakeY = state.screenShake ? Math.round((Math.random() - 0.5) * state.screenShake * 8) : 0;
-    ctx.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-    drawScene(ctx, scene, { x: state.camera.x + shakeX, y: state.camera.y + shakeY }, now / 1000, state.weather, state);
-    drawPropsAndActors(ctx, scene, { ...state, camera: { x: state.camera.x + shakeX, y: state.camera.y + shakeY } }, now / 1000, Math.floor(blinkClock * 4) % 2 === 0);
-
-    // Player sprite.
-    drawAvatar(
-      ctx,
-      state.player.appearance,
-      state.player.x * TILE_SIZE - state.camera.x + shakeX + TILE_SIZE / 2,
-      state.player.y * TILE_SIZE - state.camera.y + shakeY + TILE_SIZE / 2 + 2,
-      18,
-      { view: "topdown", blink: Math.floor(blinkClock * 5) % 2 === 0, facing: state.player.direction },
-    );
-
-    // Simple status bars.
-    ctx.fillStyle = "rgba(6,8,12,0.85)";
-    ctx.fillRect(12, 12, 156, 34);
-    ctx.fillStyle = "#fff2bf";
-    ctx.fillRect(16, 16, clamp(state.player.health, 0, state.player.maxHealth) * 1.4, 8);
-    ctx.fillStyle = "#83d8af";
-    ctx.fillRect(16, 28, clamp(state.player.energy, 0, state.player.maxEnergy) * 1.4, 6);
-    ctx.fillStyle = "#f1e4c9";
-    ctx.fillText?.("HP", 0, 0);
+    renderFrame(now);
 
     state.autosaveTimer += dt;
     if (state.autosaveTimer >= 5) {
@@ -2827,9 +2973,47 @@ function handleCombatAction() {
     requestAnimationFrame(updateLoop);
   }
 
+  function isInteractiveTarget(target) {
+    return target instanceof Element && Boolean(
+      target.closest("input, textarea, select, button, [contenteditable='true']"),
+    );
+  }
+
   function handleKeyboardDown(event) {
-    if (event.repeat) return;
-    switch (event.key.toLowerCase()) {
+    const key = event.key.toLowerCase();
+    if (key === "escape") {
+      event.preventDefault();
+      clearInputState(input);
+      if (activeModalCloser) {
+        activeModalCloser();
+      } else if (state.mode === "dialogue") {
+        state.dialogue = null;
+        state.mode = "playing";
+        refs.overlayLayer.querySelector(".dialogue-panel")?.remove();
+      } else if (state.mode === "playing" || state.mode === "combat") {
+        state.mode = "paused";
+        openPauseMenu();
+      } else if (state.mode === "paused") {
+        pausePanel?.remove();
+        pausePanel = null;
+        setModalState(false);
+        state.mode = "playing";
+      }
+      return;
+    }
+
+    if (
+      event.repeat ||
+      state.ui.modalOpen ||
+      isInteractiveTarget(event.target) ||
+      (state.mode !== "playing" && state.mode !== "combat")
+    ) return;
+
+    if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(key)) {
+      event.preventDefault();
+    }
+
+    switch (key) {
       case "w":
       case "arrowup":
         input.up = true;
@@ -2855,22 +3039,6 @@ function handleCombatAction() {
         break;
       case "enter":
         input.confirm = true;
-        break;
-      case "escape":
-        if (activeModalCloser) {
-          activeModalCloser();
-        } else if (state.mode === "dialogue") {
-          state.dialogue = null;
-          state.mode = "playing";
-          refs.overlayLayer.querySelector(".dialogue-panel")?.remove();
-        } else if (state.mode === "playing" || state.mode === "combat") {
-          state.mode = "paused";
-          openPauseMenu();
-        } else if (state.mode === "paused") {
-          pausePanel?.remove();
-          pausePanel = null;
-          state.mode = "playing";
-        }
         break;
       case "i":
         openJournal();
@@ -2919,6 +3087,10 @@ function handleCombatAction() {
     refs.mobileControls.querySelectorAll("[data-key]").forEach((button) => {
       const key = button.getAttribute("data-key");
       const set = (value) => {
+        if (state.ui.modalOpen || (state.mode !== "playing" && state.mode !== "combat")) {
+          clearInputState(input);
+          return;
+        }
         if (key === "up") input.up = value;
         if (key === "down") input.down = value;
         if (key === "left") input.left = value;
@@ -2949,22 +3121,44 @@ function handleCombatAction() {
   function attachGlobalListeners() {
     window.addEventListener("keydown", handleKeyboardDown);
     window.addEventListener("keyup", handleKeyboardUp);
+    window.addEventListener("blur", clearHeldInput);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pointerdown", () => audio.start(), { once: true });
     canvas.addEventListener("pointerdown", () => {
+      if (state.ui.modalOpen || (state.mode !== "playing" && state.mode !== "combat")) return;
       audio.start();
       input.interact = true;
     });
+  }
+
+  function clearHeldInput() {
+    clearInputState(input);
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) clearHeldInput();
   }
 
   function cleanup() {
     running = false;
     window.removeEventListener("keydown", handleKeyboardDown);
     window.removeEventListener("keyup", handleKeyboardUp);
+    window.removeEventListener("blur", clearHeldInput);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("resize", syncViewport);
+    resizeObserver?.disconnect();
   }
 
   attachMobileControls();
   attachHeaderButtons();
   attachGlobalListeners();
+  syncViewport();
+  if ("ResizeObserver" in window) {
+    resizeObserver = new ResizeObserver(syncViewport);
+    resizeObserver.observe(refs.stage);
+  } else {
+    window.addEventListener("resize", syncViewport);
+  }
   if (save && !savePromptShown) {
     savePromptShown = true;
     toast.show("Autosave restored. Continue, because the village definitely did not wait for you.");

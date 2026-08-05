@@ -37,12 +37,10 @@ function optionListFor(group, unlocked) {
 }
 
 function syncCanvasSize(canvas) {
-  const parent = canvas.parentElement;
-  if (!parent) return { width: canvas.width, height: canvas.height, dpr: 1 };
-  const rect = parent.getBoundingClientRect();
+  const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  const width = Math.max(320, Math.floor(rect.width * dpr));
-  const height = Math.max(320, Math.floor(rect.height * dpr));
+  const width = Math.max(1, Math.floor(rect.width * dpr));
+  const height = Math.max(1, Math.floor(rect.height * dpr));
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
@@ -103,6 +101,7 @@ export function openAvatarEditor({
   const current = mergeAppearance(appearance);
   const controlState = { ...current };
   let raf = 0;
+  let previewObserver = null;
 
   function syncEditorLayout() {
     const bounds = root.getBoundingClientRect();
@@ -199,6 +198,7 @@ export function openAvatarEditor({
     document.body.classList.remove("modal-open");
     window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("resize", handleResize);
+    previewObserver?.disconnect();
     root.remove();
   }
 
@@ -233,6 +233,10 @@ export function openAvatarEditor({
   saveButton.addEventListener("click", save);
   window.addEventListener("keydown", handleKeyDown);
   window.addEventListener("resize", handleResize);
+  if ("ResizeObserver" in window) {
+    previewObserver = new ResizeObserver(schedulePreview);
+    previewObserver.observe(preview.parentElement);
+  }
 
   renderForm();
   syncEditorLayout();
