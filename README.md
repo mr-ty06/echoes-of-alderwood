@@ -1,100 +1,124 @@
-# vinext-starter
+# Echoes of Alderwood
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+**Echoes of Alderwood** is a top-down pixel-art adventure game built for the browser with HTML, CSS, JavaScript, and the HTML5 Canvas API.
 
-## Prerequisites
+You awaken in the abandoned village of Alderwood with no memory of who you are. Five magical lanterns once protected the surrounding lands, but their light has failed and corruption is spreading through forests, ruins, and forgotten roads. Guided by a silent fox named Ember, you must restore the lanterns and uncover your connection to the disaster.
 
-- Node.js `>=22.13.0`
+## Playable Release
 
-## Quick Start
+The current release contains a complete playable opening chapter, **The Silent Village**, with an explorable village, home, and forest. Later chapters are represented in the story, journal, and world map and are intended for future expansion.
+
+## Features
+
+- Top-down pixel-art exploration rendered with Canvas
+- Character creator with persistent wardrobe customisation
+- Walking, running, interaction, and simple combat
+- Five important villagers with time-dependent routines and dialogue
+- Silent fox companion that follows the player and reacts to danger and secrets
+- Branching conversations and decisions with persistent consequences
+- Four-faction reputation system
+- Main quest, narrative side quests, puzzles, collectibles, and hidden items
+- Memory Fragments that unlock lore, abilities, locations, and ending context
+- Dynamic day/night cycle, rain, fog, thunderstorms, leaves, and snow
+- Area-specific procedural music and ambient sound
+- Quest journal and completion tracker
+- Interactive world map with discovered and locked locations
+- Autosave, three manual save slots, import/export, and save compatibility
+- Multiple endings and New Game Plus progression
+- Responsive desktop and mobile interface
+
+## Controls
+
+| Action | Keyboard |
+| --- | --- |
+| Move | `WASD` or arrow keys |
+| Run | Hold `Shift` |
+| Interact / confirm | `E` or `Space` |
+| Attack | `F` |
+| Journal | `I` |
+| World map | `M` |
+| Inventory | `Q` |
+| Pause / close modal | `Escape` |
+
+Touch controls appear automatically on supported mobile layouts.
+
+## Screenshots
+
+Screenshots can be added here as the game evolves.
+
+Suggested files:
+
+- `docs/screenshots/village.png`
+- `docs/screenshots/wardrobe.png`
+- `docs/screenshots/world-map.png`
+
+## Installation
+
+Clone the repository and install the development dependencies:
 
 ```bash
+git clone https://github.com/mr-ty06/echoes-of-alderwood.git
+cd echoes-of-alderwood
 npm install
+```
+
+The game state is stored locally in the browser using `localStorage`. Refreshing the page does not reset progress.
+
+## Local Development
+
+Run the bundled development server:
+
+```bash
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+Open the local URL printed in the terminal.
 
-## Included Shape
+For the standalone static game, any local HTTP server also works:
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+python3 -m http.server 8080
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+Then visit `http://localhost:8080`. A local server is recommended because the game uses JavaScript modules and absolute asset paths.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+Run the release checks with:
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+```bash
+npm test
+```
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+## Deploying With Vercel
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+This repository includes `vercel.json` configured to serve the standalone game directly from the repository root without running a framework build.
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+1. Import `mr-ty06/echoes-of-alderwood` in Vercel.
+2. Keep the project root set to the repository root.
+3. The included configuration selects the `Other` framework mode, skips the build command, and serves the root directory.
+4. Deploy.
 
-## Useful Commands
+Vercel will redeploy automatically when new commits are pushed to the connected production branch. See the [Vercel build configuration documentation](https://vercel.com/docs/builds/configure-a-build) for additional settings.
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+## Project Structure
 
-## Learn More
+```text
+index.html          Standalone game entry point
+styles.css          Game and interface styling
+game.js             Main game loop and UI orchestration
+player.js           Player model and pixel avatar renderer
+world.js            Scenes, tiles, NPCs, and interactables
+quests.js           Quest definitions and progress helpers
+dialogue.js         Branching dialogue content
+save-system.js      localStorage save management
+avatar-editor.js    Character creator and wardrobe
+assets/             Game asset notes and future external assets
+```
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+## Credits
+
+- Game concept and direction: `mr-ty06`
+- Development assistance: OpenAI Codex
+- Pixel artwork: generated at runtime with Canvas shapes
+- Audio: procedural Web Audio API synthesis
+
+No external artwork or commercial game assets are included in this release.
