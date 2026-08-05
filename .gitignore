@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Build output and framework caches
+dist/
+out/
+.next/
+.vinext/
+.wrangler/
+.vercel/
+.cache/
+.parcel-cache/
+.turbo/
+
+# Tests and browser automation
+coverage/
+playwright-report/
+test-results/
+.playwright-cli/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local work and generated release artifacts
+outputs/
+work/
+*.zip
+*.tar
+*.tar.gz
+
+# Generated TypeScript declarations
+next-env.d.ts
